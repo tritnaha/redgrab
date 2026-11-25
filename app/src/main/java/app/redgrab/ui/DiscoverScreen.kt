@@ -247,6 +247,8 @@ fun DiscoverScreen(vm: MainViewModel, onSignIn: () -> Unit, onOpenSettings: () -
                     OnlineSource.Reddit -> "Subreddit, or u/name"
                     OnlineSource.FikFap -> "Hashtag, or @user"
                     OnlineSource.SexCom -> "Search GIFs"
+                    OnlineSource.EroMe -> "Search, or @user"
+                    OnlineSource.FourChan -> "Search /gif/ threads"
                 }
                 BarSearchField(query, { query = it }, hint, modifier = head, leadingIcon = true,
                     onSearch = { keyboard?.hide(); vm.openFeed(Feed.fromQuery(source, query)) })
@@ -316,7 +318,11 @@ fun DiscoverScreen(vm: MainViewModel, onSignIn: () -> Unit, onOpenSettings: () -
                             Spacer(Modifier.height(8.dp))
                             Button(onClick = { vm.loadMoreDiscover() }) { Text("Try again") }
                         }
-                        d.feed.needsQuery -> Text(if (source == OnlineSource.FikFap) "Enter a hashtag or @user." else "Enter a search.",
+                        d.feed.needsQuery -> Text(when (source) {
+                                OnlineSource.FikFap -> "Enter a hashtag or @user."
+                                OnlineSource.EroMe -> "Enter a search or @user."
+                                else -> "Enter a search."
+                            },
                             color = MaterialTheme.colorScheme.onSurfaceVariant)
                         // More to come: normally loaded by scrolling; the button is for pages that added nothing to scroll to.
                         d.hasMore -> { if (d.page > 0) TextButton(onClick = { vm.loadMoreDiscover() }) { Text("Load more") } }

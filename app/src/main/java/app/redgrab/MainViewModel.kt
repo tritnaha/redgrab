@@ -195,6 +195,24 @@ sealed interface Feed {
         override val needsQuery get() = query.isBlank()
     }
 
+    // EroMe (albums found by search, or one uploader's albums)
+    data class EromeSearch(override val query: String) : Feed {
+        override val title get() = query
+        override val source get() = OnlineSource.EroMe
+        override val needsQuery get() = query.isBlank()
+    }
+    data class EromeUser(val name: String) : Feed {
+        override val title get() = "@$name"
+        override val source get() = OnlineSource.EroMe
+        override val query get() = "@$name"
+    }
+
+    // 4chan /gif/: every thread, or the threads whose subject has the words
+    data class ChanThreads(override val query: String) : Feed {
+        override val title get() = query.ifBlank { "/${FourChanApi.BOARD}/" }
+        override val source get() = OnlineSource.FourChan
+    }
+
     companion object {
         /** What a source shows first. */
         fun home(s: OnlineSource): Feed = when (s) {
@@ -202,9 +220,13 @@ sealed interface Feed {
             OnlineSource.Reddit -> RedditHome
             OnlineSource.FikFap -> FikFapTag("")
             OnlineSource.SexCom -> SexSearch("")
+            OnlineSource.EroMe -> EromeSearch("")
+            OnlineSource.FourChan -> ChanThreads("")
         }
 
         private val REDDIT_NAME = Regex("[^A-Za-z0-9_+-]")
+        /** EroMe user names go into the page address: letters, digits, dash, underscore, dot. Anything after that is dropped. */
+        private val EROME_NAME = Regex("^[A-Za-z0-9_.-]+")
 
         /** The feed for what was typed in the search box (or tapped in "recent"). */
         fun fromQuery(s: OnlineSource, text: String): Feed {
@@ -224,6 +246,9 @@ sealed interface Feed {
                 OnlineSource.FikFap -> if (t.startsWith("@")) t.drop(1).trim().let { if (it.isEmpty()) FikFapTag("") else FikFapUser(it) }
                     else FikFapTag(t.trimStart('#').trim())
                 OnlineSource.SexCom -> SexSearch(t)
+                OnlineSource.EroMe -> if (t.startsWith("@")) EROME_NAME.find(t.drop(1).trim())?.value?.let { EromeUser(it) } ?: EromeSearch("")
+                    else EromeSearch(t)
+                OnlineSource.FourChan -> ChanThreads(t)
             }
         }
     }
@@ -276,7 +301,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Reddit account name when signed in to Reddit, else null. */
     var redditUser by mutableStateOf(if (prefs.redditRefresh != null) prefs.redditUser ?: "" else null)
         private set
-    /** Online pictures being saved right now, by clip ID. */
+    /** Online files being saved straight into the save folder right now (pictures, 4chan clips), by clip ID. */
     var savingImages by mutableStateOf<Set<String>>(emptySet())
         private set
     /** Bumped to ask the UI to switch to the Discover tab (e.g. after tapping Related). */
@@ -704,9 +729,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         player = PlayerSession(list.map { it.id }, index.coerceIn(0, list.lastIndex), list.filter { it.id !in known }.associateBy { it.id })
     }
 
-    /** Adds an online clip to the library and saves it (HD first). Pictures go straight into the save folder. */
+    /** Adds an online clip to the library and saves it (HD first). Pictures and 4chan's files go straight into the save folder. */
     fun saveOnline(clip: Clip, q: Quality? = null) {
-        if (clip.isImage) return saveOnlineImage(clip)
+        if (OnlineSource.keepsOwnFile(clip)) return saveOnlineFile(clip)
         viewModelScope.launch(Dispatchers.IO) {
             // A RedGifs clip found on Reddit has no video addresses until RedGifs is asked for them.
             val c = if (clip.hd == null && clip.sd == null) resolveOnline(clip) ?: return@launch say("Couldn't get this clip from RedGifs.") else clip
@@ -715,19 +740,19 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    private fun saveOnlineImage(clip: Clip) {
+    private fun saveOnlineFile(clip: Clip) {
         if (!hasFolder || library.folder() == null) return say("Choose a save folder first (Settings → Save folder).")
         if (clip.id in savingImages) return
         savingImages = savingImages + clip.id
         viewModelScope.launch(Dispatchers.IO) {
             val r = runCatching {
                 val http = RedGifsApi.clientFor(getApplication<Application>().userAgent)
-                // sex.com lists tags only on the picture's own page.
-                val tags = clip.tags.ifEmpty {
+                // sex.com lists tags only on the picture's own page, and offers the real GIF behind a WebP.
+                val sexCom = OnlineSource.of(clip.id) == OnlineSource.SexCom
+                val tags = if (!sexCom || clip.tags.isNotEmpty()) clip.tags else
                     runCatching { SexComApi(http).tags(clip.id.removePrefix(OnlineSource.SexCom.prefix)) }
                         .onFailure { AppLog.w("No tags for ${clip.id}: ${it.message}") }.getOrDefault(emptyList())
-                }
-                library.addOnlineImage(clip.copy(tags = tags), http, SexComApi.files(clip))
+                library.addOnlineFile(clip.copy(tags = tags), http, if (sexCom) SexComApi.files(clip) else listOfNotNull(clip.hd))
             }
             withContext(Dispatchers.Main) { savingImages = savingImages - clip.id }
             r.onSuccess { say("Saved") }.onFailure { e ->
@@ -855,6 +880,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             OnlineSource.Reddit -> Feed.fromQuery(source, "u/$name")
             OnlineSource.FikFap -> Feed.FikFapUser(name)
             OnlineSource.SexCom -> Feed.SexSearch(name)
+            OnlineSource.EroMe -> Feed.fromQuery(source, "@$name")
+            OnlineSource.FourChan -> Feed.ChanThreads(name)
         })
         discoverRequests++
     }
@@ -886,7 +913,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 if (e is AuthException) needsSignIn = true
                 if (e is VerificationRequiredException) { prefs.pendingVerification = e.subject; verifyNeeded = true }
                 AppLog.e("Online failed (${source.label}, ${d.feed.title}): ${e.message}",
-                    e.takeUnless { it is AuthException || it is HttpException || it is RedditAuthException })
+                    e.takeUnless { it is AuthException || it is HttpException || it is RedditAuthException || it is SiteBlockedException })
                 discover = discover.copy(loading = false, error = friendly(e, source).replace("Sync failed", "Couldn't load"))
             }
         }
@@ -911,6 +938,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             is Feed.FikFapTag -> FikFapApi(http).tagPosts(f.tag, d.cursor, next)
             is Feed.FikFapUser -> FikFapApi(http).userPosts(f.name, d.cursor, next)
             is Feed.SexSearch -> SexComApi(http).search(f.query, next)
+            is Feed.EromeSearch -> EromeApi(http).search(f.query, d.cursor, next)
+            is Feed.EromeUser -> EromeApi(http).user(f.name, d.cursor, next)
+            is Feed.ChanThreads -> FourChanApi(http).threads(f.query, d.cursor, next)
         }
     }
 
@@ -1117,6 +1147,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         is AuthException -> "Your RedGifs session expired. Tap Renew to sign in again."
         is VerificationRequiredException -> "RedGifs wants a quick human check before continuing."
         is RedditAuthException -> e.message ?: "Reddit sign-in failed."
+        is SiteBlockedException -> e.message ?: "${source.label} is blocking the app."
         is UnknownHostException -> "No internet connection."
         is SSLException -> "Secure connection failed. A network filter may be blocking ${source.label}."
         is HttpException -> when {

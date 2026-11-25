@@ -47,6 +47,8 @@ class SourcesTest {
         assertEquals(OnlineSource.FikFap, OnlineSource.of("ff-1429486"))
         assertEquals(OnlineSource.SexCom, OnlineSource.of("sx-778899"))
         assertEquals(OnlineSource.FikFap, OnlineSource.of("ff-1429486-edit-1"))
+        assertEquals(OnlineSource.EroMe, OnlineSource.of("er-nqgdlwvk-0123456789"))
+        assertEquals(OnlineSource.FourChan, OnlineSource.of("4c-gif-1700000000000002"))
     }
 
     private fun clip(id: String, hd: String?, copyFile: String? = null) = Clip(id = id, hd = hd, sd = null, thumb = null, duration = 0.0,
@@ -71,6 +73,8 @@ class SourcesTest {
         assertEquals(null to "https://www.sex.com/", SourceHeaders.forHost("imagex1.sx.cdn.live"))
         assertEquals(null to null, SourceHeaders.forHost("oauth.reddit.com"))
         assertEquals(null to null, SourceHeaders.forHost("v.redd.it"))
+        assertEquals(null to "https://www.erome.com/", SourceHeaders.forHost("v11.erome.com"))
+        assertEquals(null to null, SourceHeaders.forHost("i.4cdn.org"))
         assertEquals("https://www.redgifs.com" to "https://www.redgifs.com/", SourceHeaders.forHost("media.redgifs.com"))
         // A look-alike host isn't the site.
         assertEquals("https://www.redgifs.com" to "https://www.redgifs.com/", SourceHeaders.forHost("notsex.com"))
@@ -317,6 +321,155 @@ class SourcesTest {
         assertNull(RedditApi.redgifsId("/r/videos/comments/2def/"))
     }
 
+    // ---- EroMe -------------------------------------------------------------------------
+
+    private val eromeAlbum = """<html><head><meta property="og:title" content="Rock &amp; roll"></head><body>
+        <div class="user-profile clearfix"><a id="user_name" href="https://www.erome.com/Some%20One">Some One</a>
+          <p class="mt-10" id="tags"><a href="https://www.erome.com/search?q=%23first+tag">#first tag</a> <a href="https://www.erome.com/search?q=second">second</a></p></div>
+        <div class="media-group" id="1"><div class="video"><video id="video_1" class="video-js" controls preload="none" poster="https://s11.erome.com/1234/NQgdlWvk/j7jlzmYB.jpg?v=1710720116">
+          <source src="https://v11.erome.com/1234/NQgdlWvk/j7jlzmYB_480p.mp4" type='video/mp4' label='SD' res='480'></video></div></div>
+        <div class="media-group" id="2"><div class="img"><img class="img-front lasyload" data-src="https://s11.erome.com/1234/NQgdlWvk/photo.jpg?v=1710720116"></div></div>
+        <div class="media-group" id="3"><div class="video"><video id="video_3"><source src="https://v11.erome.com/1234/NQgdlWvk/Other_720p.mp4"></video></div></div>
+        </body></html>"""
+
+    @Test fun eromeSearchOpensAlbumsAndKeepsTheirVideos() {
+        // 36 albums on the first list page (each linked twice, as on the site), so a second list page is expected later.
+        val ids = (1..36).map { "Album%02d".format(it) }
+        val fake = Fake { req ->
+            when (req.url.pathSegments.first()) {
+                "search" -> 200 to ids.joinToString("") { """<a class="album-link" href="https://www.erome.com/a/$it"></a><a href="https://www.erome.com/a/$it">t</a>""" }
+                "a" -> if (req.url.pathSegments[1] == "Album02") 410 to "<h1>Album deleted</h1>" else 200 to eromeAlbum
+                else -> 404 to ""
+            }
+        }
+        val page = EromeApi(fake.http, pauseMs = 0).search(" cute girl ", null, 1)
+
+        assertEquals("/search", fake.seen[0].url.encodedPath)
+        assertEquals("cute girl", fake.seen[0].url.queryParameter("q"))
+        assertEquals("1", fake.seen[0].url.queryParameter("page"))
+        assertEquals("https://www.erome.com/", fake.seen[0].header("Referer"))
+        assertNull(fake.seen[0].header("Origin"))
+        // One list page, then albums until there are enough clips or five requests were made.
+        assertEquals(listOf("/search", "/a/Album01", "/a/Album02", "/a/Album03", "/a/Album04"), fake.seen.map { it.url.encodedPath })
+        assertEquals(6, page.clips.size) // two videos in each of three albums; the deleted album and the photo are left out
+        assertEquals("2|" + ids.drop(4).joinToString(","), page.cursor)
+        assertTrue(page.hasMore)
+
+        val c = page.clips[0]
+        assertTrue(c.id, Regex("er-album01-[0-9a-f]{10}").matches(c.id))
+        assertTrue(Clip.validId(c.id))
+        assertEquals(OnlineSource.EroMe, OnlineSource.of(c.id))
+        assertEquals("https://v11.erome.com/1234/NQgdlWvk/j7jlzmYB_480p.mp4", c.hd)
+        assertEquals("https://s11.erome.com/1234/NQgdlWvk/j7jlzmYB.jpg?v=1710720116", c.thumb)
+        assertEquals("Rock & roll", c.description)
+        assertEquals("Some One", c.user)
+        assertEquals(listOf("first tag", "second"), c.tags)
+        assertEquals(1710720116L, c.created)
+        assertEquals(setOf("EroMe"), c.sources)
+        assertFalse(c.isImage)
+        assertNull(page.clips[1].thumb)
+        assertEquals(6, page.clips.map { it.id }.toSet().size)
+
+        // The next page carries on with the albums that weren't opened.
+        val more = EromeApi(fake.http, pauseMs = 0).search("cute girl", page.cursor, 2)
+        assertEquals("/a/Album05", fake.seen[5].url.encodedPath)
+        assertTrue(more.cursor!!.startsWith("2|Album"))
+    }
+
+    @Test fun eromeUserPageEndsWhenTheListDoes() {
+        val fake = Fake { req ->
+            if (req.url.pathSegments.first() == "a") 200 to eromeAlbum
+            else 200 to """<a href="https://www.erome.com/a/OnlyOne"></a><a href="https://www.erome.com/a/OnlyOne"></a>"""
+        }
+        val page = EromeApi(fake.http, pauseMs = 0).user("Some.One-1", null, 1)
+        assertEquals("/Some.One-1", fake.seen[0].url.encodedPath)
+        assertEquals("posts", fake.seen[0].url.queryParameter("t"))
+        assertEquals(2, page.clips.size)
+        assertNull(page.cursor)
+        assertFalse(page.hasMore)
+    }
+
+    @Test fun eromeBotCheckIsReportedNotRetried() {
+        val fake = Fake { 200 to "<html><head><title>Please wait a few moments</title></head></html>" }
+        try { EromeApi(fake.http, pauseMs = 0).search("x", null, 1); fail("expected the check to be reported") }
+        catch (e: SiteBlockedException) { assertTrue(e.message!!.contains("bot check")) }
+        assertEquals(1, fake.seen.size)
+    }
+
+    // ---- 4chan --------------------------------------------------------------------------
+
+    private val catalog = """[
+      {"page":1,"threads":[
+        {"no":100,"sticky":1,"sub":"Rules","com":"Read them","tim":1700000000000001,"ext":".png","images":0},
+        {"no":201,"sub":"Dance &amp; music","com":"post yours<br>please","tim":1700000000000002,"ext":".webm","images":12},
+        {"no":202,"com":"<span class=\"quote\">&gt;dance</span> party thread","images":3},
+        {"no":203,"sub":"Text only","com":"nothing here","images":0}]},
+      {"page":2,"threads":[{"no":204,"sub":"Cats","com":"meow","tim":1700000000000003,"ext":".gif","images":1}]}
+    ]"""
+
+    private fun thread(no: Int) = """{"posts":[
+      {"no":$no,"sub":"Dance &amp; music","com":"post yours","tim":${no}0001,"ext":".webm","w":640,"h":360,"time":1700001000,"filename":"a"},
+      {"no":${no}1,"com":"reply without a file","time":1700001100},
+      {"no":${no}2,"tim":${no}0002,"ext":".jpg","w":10,"h":10,"time":1700001200},
+      {"no":${no}3,"tim":${no}0003,"ext":".gif","w":200,"h":100,"time":1700001300},
+      {"no":${no}4,"tim":${no}0004,"ext":".mp4","w":720,"h":1280,"time":1700001400},
+      {"no":${no}5,"tim":${no}0005,"ext":".webm","w":1,"h":1,"time":1700001500,"filedeleted":1}
+    ]}"""
+
+    @Test fun fourChanCatalogIsFilteredAndThreadsBecomeClips() {
+        val fake = Fake { req ->
+            val last = req.url.pathSegments.last()
+            when {
+                last == "catalog.json" -> 200 to catalog
+                last == "202.json" -> 404 to "" // gone since the catalog was read
+                else -> 200 to thread(last.removeSuffix(".json").toInt())
+            }
+        }
+        val page = FourChanApi(fake.http, pauseMs = 0).threads(" DANCE ", null, 1)
+
+        assertEquals("a.4cdn.org", fake.seen[0].url.host)
+        assertEquals(listOf("/gif/catalog.json", "/gif/thread/201.json", "/gif/thread/202.json"), fake.seen.map { it.url.encodedPath })
+        assertNull(fake.seen[0].header("Referer")); assertNull(fake.seen[0].header("Origin"))
+        // Thread 201 has a WebM, a GIF and an MP4; the photo, the deleted file and the text reply are left out.
+        assertEquals(listOf("4c-gif-2010001", "4c-gif-2010003", "4c-gif-2010004"), page.clips.map { it.id })
+        assertNull(page.cursor)
+        assertFalse(page.hasMore)
+        val c = page.clips[0]
+        assertTrue(Clip.validId(c.id))
+        assertEquals(OnlineSource.FourChan, OnlineSource.of(c.id))
+        assertEquals("https://i.4cdn.org/gif/2010001.webm", c.hd)
+        assertEquals("https://i.4cdn.org/gif/2010001s.jpg", c.thumb)
+        assertEquals("Dance & music", c.description)
+        assertEquals(640, c.width); assertEquals(360, c.height)
+        assertEquals(1700001000L, c.created)
+        assertEquals(setOf("4chan"), c.sources)
+        assertFalse(c.isImage)
+        assertEquals("webm", c.fileExt)
+        assertTrue(OnlineSource.keepsOwnFile(c))
+        assertTrue(page.clips[1].isImage)
+        assertFalse(page.clips[1].hasAudio)
+
+        // No search: every thread with files, in the catalog's order, except pinned ones; the rest waits in the cursor.
+        val all = FourChanApi(Fake { req -> if (req.url.pathSegments.last() == "catalog.json") 200 to catalog else 200 to """{"posts":[]}""" }.http, pauseMs = 0)
+            .threads("", null, 1)
+        assertTrue(all.clips.isEmpty())
+        assertNull(all.cursor) // 201, 202 and 204 were all opened within the request limit
+        // Continuing: threads are opened until there are enough clips (here four threads of three); the rest stays in the cursor.
+        val next = FourChanApi(fake.http, pauseMs = 0).threads("", "204,205,206,207,208", 2)
+        assertEquals(12, next.clips.size)
+        assertEquals("208", next.cursor)
+        assertTrue(next.hasMore)
+    }
+
+    @Test fun onlyPicturesAnd4chanFilesAreKeptAsTheirOwnFile() {
+        assertTrue(OnlineSource.keepsOwnFile(clip("sx-1", "https://imagex1.sx.cdn.live/a/1.webp")))
+        assertTrue(OnlineSource.keepsOwnFile(clip("4c-gif-1", "https://i.4cdn.org/gif/1.mp4")))
+        assertFalse(OnlineSource.keepsOwnFile(clip("er-a-0123456789", "https://v1.erome.com/1/a/x_720p.mp4")))
+        assertFalse(OnlineSource.keepsOwnFile(clip("ff-1", "https://x.b-cdn.net/v/playlist.m3u8")))
+        assertFalse(OnlineSource.keepsOwnFile(clip("abc", "https://media.redgifs.com/Abc.mp4")))
+        assertEquals(setOf("Discover", "Reddit", "FikFap", "sex.com", "EroMe", "4chan"), OnlineSource.SAVED_LABELS)
+    }
+
     // ---- what's typed in the search box -------------------------------------------------
 
     @Test fun typedTextOpensTheRightFeed() {
@@ -329,11 +482,17 @@ class SourcesTest {
         assertEquals(Feed.FikFapTag("foo-bar"), Feed.fromQuery(OnlineSource.FikFap, "#foo-bar"))
         assertEquals(Feed.FikFapUser("Hot-sauce-34"), Feed.fromQuery(OnlineSource.FikFap, "@Hot-sauce-34"))
         assertEquals(Feed.SexSearch("bed"), Feed.fromQuery(OnlineSource.SexCom, "bed"))
+        assertEquals(Feed.EromeSearch("cute girl"), Feed.fromQuery(OnlineSource.EroMe, " cute girl "))
+        assertEquals(Feed.EromeUser("Some.One-1"), Feed.fromQuery(OnlineSource.EroMe, "@Some.One-1/?x"))
+        assertEquals(Feed.ChanThreads("dance"), Feed.fromQuery(OnlineSource.FourChan, "dance"))
+        assertTrue(Feed.home(OnlineSource.EroMe).needsQuery)
+        assertFalse(Feed.home(OnlineSource.FourChan).needsQuery)
         assertTrue(Feed.home(OnlineSource.FikFap).needsQuery)
         assertTrue(Feed.home(OnlineSource.SexCom).needsQuery)
         assertFalse(Feed.home(OnlineSource.Reddit).needsQuery)
         // What a feed puts in the search box opens the same feed again (that's how "recent" works).
-        for (f in listOf(Feed.Subreddit("videos"), Feed.RedditUser("x"), Feed.FikFapTag("t"), Feed.FikFapUser("u"), Feed.SexSearch("q"))) {
+        for (f in listOf(Feed.Subreddit("videos"), Feed.RedditUser("x"), Feed.FikFapTag("t"), Feed.FikFapUser("u"), Feed.SexSearch("q"),
+            Feed.EromeSearch("q"), Feed.EromeUser("u"), Feed.ChanThreads("q"))) {
             assertEquals(f, Feed.fromQuery(f.source, f.query))
         }
     }

@@ -17,15 +17,26 @@ import java.util.concurrent.atomic.AtomicBoolean
  * RedGifs IDs have none. [label] is what's kept in [Clip.sources] for clips saved from that site.
  */
 enum class OnlineSource(val label: String, val prefix: String) {
-    RedGifs("RedGifs", ""), Reddit("Reddit", "rd-"), FikFap("FikFap", "ff-"), SexCom("sex.com", "sx-");
+    RedGifs("RedGifs", ""), Reddit("Reddit", "rd-"), FikFap("FikFap", "ff-"), SexCom("sex.com", "sx-"),
+    EroMe("EroMe", "er-"), FourChan("4chan", "4c-");
 
     companion object {
         fun of(id: String): OnlineSource = entries.firstOrNull { it.prefix.isNotEmpty() && id.startsWith(it.prefix) } ?: RedGifs
 
         /** [Clip.sources] values that mean "saved from the Online tab" ("Discover" = RedGifs). */
-        val SAVED_LABELS: Set<String> = setOf("Discover", Reddit.label, FikFap.label, SexCom.label)
+        val SAVED_LABELS: Set<String> = setOf("Discover") + entries.filter { it != RedGifs }.map { it.label }
+
+        /**
+         * True for clips that are saved as their own file in the "imported" subfolder instead of
+         * as `<id>-hd.mp4`: pictures (sex.com GIFs) and everything from 4chan, whose videos are
+         * WebM files.
+         */
+        fun keepsOwnFile(c: Clip) = c.isImage || of(c.id) == FourChan
     }
 }
+
+/** The site answered with a bot check or a block page instead of content. The message is shown as is. */
+class SiteBlockedException(msg: String) : IOException(msg)
 
 /** Reddit needs a client ID, or the saved sign-in no longer works. The message is shown as is. */
 class RedditAuthException(msg: String) : IOException(msg)
@@ -56,17 +67,22 @@ object SourceHeaders {
         // b-cdn.net is the video CDN FikFap streams from.
         host.on("fikfap.com") || host.on("b-cdn.net") || host in fikfapHosts -> FIKFAP to "$FIKFAP/"
         host.on("sex.com") || host.on("sx.cdn.live") -> null to "https://www.sex.com/"
-        isReddit(host) -> null to null
+        host.on("erome.com") -> null to "https://www.erome.com/"
+        isReddit(host) || host.on("4cdn.org") || host.on("4chan.org") -> null to null
         else -> "https://www.redgifs.com" to "https://www.redgifs.com/"
     }
 }
 
-private fun JSONObject.http(key: String): String? = optString(key).takeIf { it.startsWith("http") }
-private fun JSONObject.text(key: String): String = if (isNull(key)) "" else optString(key)
-private fun JSONObject.num(key: String): Double = optDouble(key, 0.0).takeIf { !it.isNaN() } ?: 0.0
+internal fun JSONObject.http(key: String): String? = optString(key).takeIf { it.startsWith("http") }
+internal fun JSONObject.text(key: String): String = if (isNull(key)) "" else optString(key)
+internal fun JSONObject.num(key: String): Double = optDouble(key, 0.0).takeIf { !it.isNaN() } ?: 0.0
+
+/** The few HTML character codes that turn up in titles and tags. */
+internal fun unescapeHtml(s: String) = s.replace("&#39;", "'").replace("&#039;", "'").replace("&#x27;", "'").replace("&quot;", "\"")
+    .replace("&lt;", "<").replace("&gt;", ">").replace("&nbsp;", " ").replace("&amp;", "&")
 
 /** GET that returns the body, or throws [HttpException] with the status code. */
-private fun OkHttpClient.getText(url: HttpUrl, headers: Map<String, String> = emptyMap()): String {
+internal fun OkHttpClient.getText(url: HttpUrl, headers: Map<String, String> = emptyMap()): String {
     val req = Request.Builder().url(url).apply { headers.forEach { (k, v) -> header(k, v) } }.build()
     newCall(req).execute().use { r ->
         val body = r.body?.string().orEmpty()
@@ -125,7 +141,7 @@ class SexComApi(private val http: OkHttpClient) {
     fun tags(id: String): List<String> {
         val html = http.getText("https://www.sex.com/en/gifs/$id".toHttpUrl(), mapOf("Accept" to "text/html"))
         val part = html.substringAfter("</h1>", "").substringBefore("</section>", "")
-        return TAG_RE.findAll(part).map { m -> unescape(m.groupValues[1]).trim().trimStart('@', '#') }
+        return TAG_RE.findAll(part).map { m -> unescapeHtml(m.groupValues[1]).trim().trimStart('@', '#') }
             .filter { it.isNotEmpty() && it.length <= 40 }.distinctBy { it.lowercase() }.take(40).toList()
     }
 
@@ -134,9 +150,6 @@ class SexComApi(private val http: OkHttpClient) {
         private val logged = AtomicBoolean(false)
         /** Text between two HTML tags. */
         private val TAG_RE = Regex(">([^<>]+)<")
-
-        private fun unescape(s: String) = s.replace("&amp;", "&").replace("&#39;", "'").replace("&#x27;", "'")
-            .replace("&quot;", "\"").replace("&lt;", "<").replace("&gt;", ">").replace("&nbsp;", " ")
 
         /** Addresses to try when saving, best first: the real GIF behind a WebP, then the file as listed. */
         fun files(c: Clip): List<String> {

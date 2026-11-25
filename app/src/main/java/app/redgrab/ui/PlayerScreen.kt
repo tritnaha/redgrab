@@ -426,10 +426,13 @@ fun PlayerScreen(vm: MainViewModel, session: PlayerSession) {
                         }
                         Text(
                             buildString {
-                                append(if (clip.isImage) clip.fileExt.uppercase() else Format.duration(clip.duration))
-                                if (clip.width > 0) append(if (clip.isImage) " · ${clip.width}×${clip.height}" else " · ${clip.height}p")
-                                if (!clip.hasAudio && !clip.isImage) append(" · no sound")
-                                if (clip.views > 0) append(" · %,d views".format(clip.views))
+                                // Some sites don't say how long a clip is; the length is left out then.
+                                listOfNotNull(
+                                    if (clip.isImage) clip.fileExt.uppercase() else if (clip.duration > 0 || !online) Format.duration(clip.duration) else null,
+                                    if (clip.width <= 0) null else if (clip.isImage) "${clip.width}×${clip.height}" else "${clip.height}p",
+                                    "no sound".takeIf { !clip.hasAudio && !clip.isImage },
+                                    "%,d views".format(clip.views).takeIf { clip.views > 0 },
+                                ).joinTo(this, " · ")
                             },
                             color = Color.White.copy(alpha = 0.7f), fontSize = 12.sp,
                         )
@@ -484,7 +487,7 @@ fun PlayerScreen(vm: MainViewModel, session: PlayerSession) {
                     if (clip.isCopy) {
                         Text("Edited copy · ${clip.copyNote}", color = RgPurple.copy(alpha = 0.95f), fontSize = 12.sp,
                             maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-                    } else if (clip.imported || clip.isImage) {
+                    } else if (clip.imported || OnlineSource.keepsOwnFile(clip)) {
                         // Where it's from ("Imported", or the site a picture was saved from), then the file once it's on the phone.
                         Text(listOfNotNull(clip.sources.firstOrNull() ?: "Imported", clip.copyFile?.substringAfterLast('/')).joinToString(" · "),
                             color = Color.White.copy(alpha = 0.7f), fontSize = 12.sp,
@@ -519,7 +522,7 @@ fun PlayerScreen(vm: MainViewModel, session: PlayerSession) {
                             vm.saveOnline(clip)
                         }
                     } else if (saved) PillButton(Icons.Default.ContentCut, "Edit", Color.White.copy(alpha = 0.15f)) { vm.openEditor(clip) }
-                    else PillButton(Icons.Default.Download, "Save", Color.White.copy(alpha = 0.15f)) {
+                    else PillButton(Icons.Default.Download, if (clip.id in vm.savingImages) "Saving…" else "Save", Color.White.copy(alpha = 0.15f)) {
                         if (online) vm.saveOnline(clip) else vm.download(clip.id)
                     }
                     Spacer(Modifier.weight(1f))

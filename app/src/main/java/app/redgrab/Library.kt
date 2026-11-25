@@ -1069,32 +1069,51 @@ class Library(private val ctx: Context) {
     }
 
     /**
-     * Saves a picture found online (a sex.com GIF) into the "imported" subfolder as
-     * `<id>.<type>` and lists it in the library with its title and tags. [urls] are tried in
-     * order; the first that turns out to be a real picture is kept.
+     * Saves a file found online that keeps its own type (a sex.com GIF, a 4chan WebM) into the
+     * "imported" subfolder as `<id>.<type>` and lists it in the library with its title and
+     * tags. [urls] are tried in order; the first that turns out to be a real picture or video
+     * is kept.
      */
-    fun addOnlineImage(c: Clip, http: okhttp3.OkHttpClient, urls: List<String>) {
+    fun addOnlineFile(c: Clip, http: okhttp3.OkHttpClient, urls: List<String>) {
         require(Clip.validId(c.id)) { "Bad clip ID" }
         if (synchronized(lock) { imports.any { it.id == c.id } }) return
         val dir = importedDir(create = true) ?: error("Choose a save folder first")
         val resolver = ctx.contentResolver
         var failure: Exception? = null
         for (url in urls) {
-            val ext = url.substringBefore('?').substringAfterLast('.', "").lowercase().takeIf { it in Clip.IMAGE_EXT } ?: continue
+            val ext = url.substringBefore('?').substringAfterLast('.', "").lowercase().takeIf { it in Clip.IMAGE_EXT || it in Clip.VIDEO_EXT } ?: continue
             val name = "${c.id}.$ext"
             dir.findFile("$name.part")?.delete()
             val part = dir.createFile("application/octet-stream", "$name.part") ?: error("Could not create file in folder")
             try {
                 RedGifsApi.download(http, url).use { r ->
-                    if (r.header("Content-Length") == "0" || r.body?.contentType()?.type == "text") throw java.io.IOException("Not a picture")
+                    if (r.header("Content-Length") == "0" || r.body?.contentType()?.type == "text") throw java.io.IOException("Not a media file")
                     resolver.openOutputStream(part.uri, "wt")!!.use { out -> r.body!!.byteStream().copyTo(out) }
                 }
-                // Reading its size doubles as the check that it really is a picture; also makes the offline thumbnail.
-                val size = makeImageThumb(c.id, part.uri) ?: throw java.io.IOException("Not a picture")
+                // Reading its size doubles as the check that the file is what it says; also makes the offline thumbnail.
+                var duration = 0.0
+                var audio = false
+                val size = if (ext in Clip.IMAGE_EXT) makeImageThumb(c.id, part.uri) ?: throw java.io.IOException("Not a picture")
+                else {
+                    val r = android.media.MediaMetadataRetriever()
+                    try {
+                        r.setDataSource(ctx, part.uri)
+                        fun num(key: Int) = r.extractMetadata(key)?.toLongOrNull() ?: 0L
+                        duration = num(android.media.MediaMetadataRetriever.METADATA_KEY_DURATION) / 1000.0
+                        audio = r.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_HAS_AUDIO) == "yes"
+                        if (r.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_HAS_VIDEO) != "yes" || duration <= 0) throw java.io.IOException("Not a playable video")
+                        var w = num(android.media.MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH).toInt()
+                        var h = num(android.media.MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT).toInt()
+                        if (num(android.media.MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION).toInt() % 180 != 0) w = h.also { h = w }
+                        w to h
+                    } catch (e: RuntimeException) {
+                        throw java.io.IOException("Not a playable video")
+                    } finally { r.release() }.also { makeThumb(c.id, part.uri) }
+                }
                 synchronized(importLock) {
                     val done = DocumentsContract.renameDocument(resolver, part.uri, name) ?: error("Could not rename the finished file")
                     val finalName = DocumentFile.fromSingleUri(ctx, done)?.name ?: name
-                    val clip = c.copy(sd = null, width = size.first, height = size.second, hasAudio = false, duration = 0.0,
+                    val clip = c.copy(sd = null, width = size.first, height = size.second, hasAudio = audio, duration = duration,
                         created = c.created.takeIf { it > 0 } ?: (System.currentTimeMillis() / 1000),
                         sources = c.sources.ifEmpty { setOf(OnlineSource.of(c.id).label) }, copyFile = "$IMPORT_DIR/$finalName")
                     synchronized(lock) {
@@ -1113,7 +1132,7 @@ class Library(private val ctx: Context) {
                 AppLog.w("Could not save ${c.id} as .$ext: ${e.message}")
             }
         }
-        throw failure ?: java.io.IOException("No picture address")
+        throw failure ?: java.io.IOException("No file address")
     }
 
     // ---- auto-sync: watched collections ------------------------------------------------
