@@ -225,7 +225,7 @@ fun DiscoverScreen(vm: MainViewModel, onSignIn: () -> Unit, onOpenSettings: () -
         }
         // Online clips animate only if "also preview unsaved clips" is on; saved ones always can.
         val streamOk = vm.previewUnsaved
-        val moving = rememberActivePreviews(grid, vm.previewsActive, vm.previewCount, changeKey = s.saved.size) { id -> id in s.saved || streamOk }
+        val moving = rememberActivePreviews(grid, vm.previewsActive, vm.previewLimit, changeKey = s.saved.size) { id -> id in s.saved || streamOk }
         val head = Modifier.padding(horizontal = m.head)
         // Shortcuts: on Reddit your saved and upvoted posts and the subreddits you joined; then what you opened recently.
         val shortcuts = remember(source, d.subs, vm.recents, vm.redditUser) {

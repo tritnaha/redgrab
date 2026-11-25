@@ -316,6 +316,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         private set
     var previewCount by mutableStateOf(prefs.previewCount)
         private set
+    /** How many previews may really play at once: the chosen number, or as many as the phone can decode. */
+    val previewLimit: Int get() = if (previewCount == 0) app.redgrab.ui.maxPreviews else previewCount
+    var playerFill by mutableStateOf(prefs.playerFill)
+        private set
     /**
      * Whether tiles may animate right now: switched on, not in SFW mode, nothing covering the
      * grid (player, editor, delete screen), and the phone isn't in battery saver.
@@ -968,6 +972,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun closePlayer() { player = null }
 
     fun changePlayMuted(v: Boolean) { prefs.playMuted = v; playMuted = v }
+    fun changePlayerFill(v: Boolean) { prefs.playerFill = v; playerFill = v }
 
     fun browse(f: Facet) {
         facet = f

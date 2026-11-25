@@ -22,6 +22,16 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
+import androidx.compose.material.icons.filled.FitScreen
+import androidx.compose.material.icons.filled.ZoomOutMap
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -150,6 +160,9 @@ fun PlayerScreen(vm: MainViewModel, session: PlayerSession) {
     var currentSource by remember { mutableStateOf(Source.Stream) }
     var retried by remember { mutableStateOf(false) }
     var confirmDelete by remember { mutableStateOf(false) }
+    /** Width and height of what's showing (from the site, else from the video or picture itself); 0 = not known yet. */
+    var mediaSize by remember { mutableStateOf(0 to 0) }
+    var boxSize by remember { mutableStateOf(IntSize.Zero) }
 
     val ua = remember { vm.library.prefs.userAgent ?: runCatching { WebSettings.getDefaultUserAgent(ctx) }.getOrDefault("Mozilla/5.0") }
     // Saved files: read straight from the phone. Unsaved clips: stream through a local cache.
@@ -186,6 +199,7 @@ fun PlayerScreen(vm: MainViewModel, session: PlayerSession) {
     LaunchedEffect(clip.id, s.qualities[clip.id], clip.copyFile) {
         retried = false
         position = 0; duration = 0
+        mediaSize = if (clip.width > 0 && clip.height > 0) clip.width to clip.height else 0 to 0
         val local = withContext(Dispatchers.IO) { vm.library.markSeen(listOf(clip.id)); vm.library.localFile(clip) }
         playingQuality = local?.second
         imageUri = null
@@ -225,6 +239,9 @@ fun PlayerScreen(vm: MainViewModel, session: PlayerSession) {
             override fun onIsPlayingChanged(isPlaying: Boolean) { playing = exo.playWhenReady }
             override fun onPlaybackStateChanged(state: Int) { buffering = state == Player.STATE_BUFFERING }
             override fun onRenderedFirstFrame() { firstFrame = true }
+            override fun onVideoSizeChanged(v: androidx.media3.common.VideoSize) {
+                if (v.width > 0 && v.height > 0) mediaSize = (v.width * v.pixelWidthHeightRatio).toInt() to v.height
+            }
             override fun onPlayerError(e: PlaybackException) {
                 val clip = currentClip
                 AppLog.w("Playback error for ${clip.id} (${currentSource}): ${e.errorCodeName}")
@@ -288,18 +305,27 @@ fun PlayerScreen(vm: MainViewModel, session: PlayerSession) {
         onDispose { lifecycle.removeObserver(obs); exo.release() }
     }
 
-    // Immersive fullscreen: hide status and navigation bars.
-    DisposableEffect(fullscreen) {
+    // The player takes the whole screen: the status and navigation bars stay hidden while it's open
+    // (a swipe from the edge shows them briefly). "Fullscreen" additionally hides the player's own controls.
+    DisposableEffect(Unit) {
         val window = (view.context as? Activity)?.window
         if (window != null) {
             val ctl = WindowCompat.getInsetsController(window, view)
-            if (fullscreen) {
-                ctl.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-                ctl.hide(WindowInsetsCompat.Type.systemBars())
-            } else ctl.show(WindowInsetsCompat.Type.systemBars())
+            ctl.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            ctl.hide(WindowInsetsCompat.Type.systemBars())
         }
         onDispose { if (window != null) WindowCompat.getInsetsController(window, view).show(WindowInsetsCompat.Type.systemBars()) }
     }
+
+    // How the clip sits on the screen. With "Fill the screen" on, a clip that is the same way up as
+    // the screen covers all of it (edges cropped). Otherwise the whole clip is shown as large as it
+    // fits, over a dimmed view of what's behind, and a tap beside it closes the player.
+    val aspect = if (mediaSize.second > 0) mediaSize.first.toFloat() / mediaSize.second else 0f
+    val screenAspect = if (boxSize.height > 0) boxSize.width.toFloat() / boxSize.height else 0f
+    val cover = vm.playerFill && (aspect == 0f || screenAspect == 0f || (aspect < 1f) == (screenAspect < 1f))
+    val coverNow by rememberUpdatedState(cover)
+    val aspectNow by rememberUpdatedState(aspect)
+    val scale = if (cover) ContentScale.Crop else ContentScale.Fit
 
     BackHandler { if (fullscreen) fullscreen = false else vm.closePlayer() }
 
@@ -313,33 +339,51 @@ fun PlayerScreen(vm: MainViewModel, session: PlayerSession) {
         else { exo.play(); playing = true; show(Icons.Default.PlayArrow) }
     }
 
-    Box(Modifier.fillMaxSize().background(Color.Black)) {
+    Box(Modifier.fillMaxSize().onSizeChanged { boxSize = it }.background(Color.Black.copy(alpha = if (cover) 1f else 0.88f))) {
         AndroidView(
             modifier = Modifier.fillMaxSize(),
             factory = { c ->
                 PlayerView(c).apply {
                     useController = false
-                    resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
                     setShutterBackgroundColor(android.graphics.Color.TRANSPARENT)
                     player = exo
                 }
             },
+            update = {
+                it.resizeMode = if (cover) AspectRatioFrameLayout.RESIZE_MODE_ZOOM else AspectRatioFrameLayout.RESIZE_MODE_FIT
+                // A picture needs no video surface; left in place it would paint the whole screen black behind the picture.
+                it.visibility = if (imageUri != null) android.view.View.GONE else android.view.View.VISIBLE
+            },
         )
 
-        imageUri?.let { AsyncImage(it, null, contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize().background(Color.Black)) }
-
-        // Thumbnail over the (still black) video surface until the first frame arrives.
-        if (!firstFrame && imageUri == null) {
-            AsyncImage(thumbModel(s, vm.library, clip), null, contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize().background(Color.Black))
+        imageUri?.let {
+            AsyncImage(it, null, contentScale = scale, modifier = Modifier.fillMaxSize(),
+                onSuccess = { ok -> if (ok.result.image.width > 0 && ok.result.image.height > 0) mediaSize = ok.result.image.width to ok.result.image.height })
         }
 
-        // Gesture layer: left quarter = previous, right quarter = next, middle = play/pause; swipe to navigate.
+        // Thumbnail over the (still empty) video surface until the first frame arrives.
+        if (!firstFrame && imageUri == null) {
+            AsyncImage(thumbModel(s, vm.library, clip), null, contentScale = scale, modifier = Modifier.fillMaxSize())
+        }
+
+        // Gesture layer. On the clip: left quarter = previous, right quarter = next, middle = play/pause.
+        // Beside the clip (when it doesn't cover the screen): close. Swipe sideways to navigate, down to close.
         Box(
             Modifier.fillMaxSize()
                 .pointerInput(session.index, session.ids.size) {
                     detectTapGestures { o ->
-                        val w = size.width
+                        val w = size.width.toFloat()
+                        val h = size.height.toFloat()
+                        val a = aspectNow
+                        // The part of the screen the clip takes up when it's shown whole.
+                        val onClip = coverNow || a <= 0f || h <= 0f || run {
+                            val wide = w / h > a
+                            val mw = if (wide) h * a else w
+                            val mh = if (wide) h else w / a
+                            kotlin.math.abs(o.x - w / 2) <= mw / 2 && kotlin.math.abs(o.y - h / 2) <= mh / 2
+                        }
                         when {
+                            !onClip -> vm.closePlayer()
                             o.x < w * 0.25f -> prev()
                             o.x > w * 0.75f -> next()
                             else -> togglePlay()
@@ -352,6 +396,13 @@ fun PlayerScreen(vm: MainViewModel, session: PlayerSession) {
                         onDragStart = { dx = 0f },
                         onDragEnd = { if (dx > 120) prev() else if (dx < -120) next() },
                     ) { _, d -> dx += d }
+                }
+                .pointerInput(Unit) {
+                    var dy = 0f
+                    detectVerticalDragGestures(
+                        onDragStart = { dy = 0f },
+                        onDragEnd = { if (dy > size.height * 0.12f) vm.closePlayer() },
+                    ) { _, d -> dy += d }
                 },
         )
 
@@ -383,14 +434,17 @@ fun PlayerScreen(vm: MainViewModel, session: PlayerSession) {
         if (fullscreen) {
             // Only a subtle corner control in fullscreen.
             IconButton(onClick = { fullscreen = false }, modifier = Modifier.align(Alignment.TopEnd).padding(8.dp)) {
-                Icon(Icons.Default.FullscreenExit, "Exit fullscreen", tint = Color.White.copy(alpha = 0.6f))
+                Icon(Icons.Default.FullscreenExit, "Show controls", tint = Color.White.copy(alpha = 0.6f))
             }
         } else {
             // Top bar.
             Row(
                 Modifier.align(Alignment.TopCenter).fillMaxWidth()
                     .background(Brush.verticalGradient(listOf(Color.Black.copy(alpha = 0.7f), Color.Transparent)))
-                    .statusBarsPadding().padding(horizontal = 4.dp, vertical = 4.dp),
+                    // Clear of the camera cut-out now that the status bar is hidden. Taps on the bar itself do nothing.
+                    .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal))
+                    .pointerInput(Unit) { detectTapGestures { } }
+                    .padding(horizontal = 4.dp, vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 IconButton(onClick = vm::closePlayer) { Icon(Icons.Default.Close, "Close", tint = Color.White) }
@@ -401,14 +455,18 @@ fun PlayerScreen(vm: MainViewModel, session: PlayerSession) {
                     Icon(if (vm.playMuted) Icons.AutoMirrored.Filled.VolumeOff else Icons.AutoMirrored.Filled.VolumeUp,
                         if (vm.playMuted) "Unmute" else "Mute", tint = Color.White)
                 }
-                IconButton(onClick = { fullscreen = true }) { Icon(Icons.Default.Fullscreen, "Fullscreen", tint = Color.White) }
+                IconButton(onClick = { vm.changePlayerFill(!vm.playerFill) }) {
+                    Icon(if (vm.playerFill) Icons.Default.FitScreen else Icons.Default.ZoomOutMap,
+                        if (vm.playerFill) "Show the whole clip" else "Fill the screen", tint = Color.White)
+                }
+                IconButton(onClick = { fullscreen = true }) { Icon(Icons.Default.Fullscreen, "Hide controls", tint = Color.White) }
             }
 
             // Bottom panel: info, tags, progress, actions.
             Column(
                 Modifier.align(Alignment.BottomCenter).fillMaxWidth()
                     .background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.85f))))
-                    .navigationBarsPadding().padding(horizontal = 16.dp, vertical = 8.dp),
+                    .navigationBarsPadding().pointerInput(Unit) { detectTapGestures { } }.padding(horizontal = 16.dp, vertical = 8.dp),
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {

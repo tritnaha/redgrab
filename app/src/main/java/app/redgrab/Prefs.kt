@@ -98,10 +98,15 @@ class Prefs(context: Context) : RedditStore {
         get() = sp.getBoolean("previewUnsaved", false)
         set(v) = sp.edit { putBoolean("previewUnsaved", v) }
 
-    /** How many previews may play at the same time (2, 4 or 6). */
+    /** How many previews may play at the same time: 2, 4 or 6, or 0 for everything on screen. */
     var previewCount: Int
-        get() = sp.getInt("previewCount", 4)
-        set(v) = sp.edit { putInt("previewCount", v.coerceIn(1, 6)) }
+        get() = sp.getInt("previewCount", 0)
+        set(v) = sp.edit { putInt("previewCount", v.coerceIn(0, 6)) }
+
+    /** In the player, upright clips fill the whole screen (edges cropped) instead of being shown whole. */
+    var playerFill: Boolean
+        get() = sp.getBoolean("playerFill", true)
+        set(v) = sp.edit { putBoolean("playerFill", v) }
 
     /** Library layout: false = even grid, true = wall (each preview keeps its own shape). */
     var wall: Boolean

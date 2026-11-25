@@ -32,6 +32,7 @@ import androidx.compose.material.icons.automirrored.filled.VolumeDown
 import androidx.compose.material3.Slider
 import androidx.compose.material.icons.filled.CreateNewFolder
 import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.HighQuality
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Info
@@ -189,7 +190,7 @@ fun SettingsScreen(vm: MainViewModel, onSignIn: () -> Unit, onOpenLog: () -> Uni
 
             Section("Previews") {
                 SwitchRow(Icons.Default.Animation, "Moving previews",
-                    "Previews on screen play silently in a loop once you stop scrolling. Saved clips play from the phone. Paused in SFW mode and battery saver.",
+                    "Previews on screen play silently in a loop. Saved clips play from the phone. Paused in SFW mode and battery saver.",
                     vm.previews, onChange = vm::changePreviews)
                 if (vm.previews) {
                     SwitchRow(Icons.Default.Public, "Also for clips that aren't saved",
@@ -197,11 +198,12 @@ fun SettingsScreen(vm: MainViewModel, onSignIn: () -> Unit, onOpenLog: () -> Uni
                         vm.previewUnsaved, onChange = vm::changePreviewUnsaved)
                     Text("How many play at once", fontWeight = FontWeight.Medium, modifier = Modifier.padding(start = 16.dp, top = 4.dp))
                     SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
-                        listOf(2, 4, 6).forEachIndexed { i, n ->
-                            SegmentedButton(vm.previewCount == n, { vm.changePreviewCount(n) }, SegmentedButtonDefaults.itemShape(i, 3)) { Text("$n") }
+                        // 0 = everything on screen, up to what the phone can decode at once.
+                        listOf(2, 4, 6, 0).forEachIndexed { i, n ->
+                            SegmentedButton(vm.previewCount == n, { vm.changePreviewCount(n) }, SegmentedButtonDefaults.itemShape(i, 4)) { Text(if (n == 0) "All" else "$n") }
                         }
                     }
-                    Text("More at once looks livelier but uses more battery. The rest of the screen stays as stills.",
+                    Text("All: everything on screen (up to ${maxPreviews} on this phone). Fewer saves battery; the rest stay as stills.",
                         style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(horizontal = 16.dp).padding(bottom = 12.dp))
                 }
@@ -211,6 +213,9 @@ fun SettingsScreen(vm: MainViewModel, onSignIn: () -> Unit, onOpenLog: () -> Uni
                 SwitchRow(Icons.AutoMirrored.Filled.VolumeOff, "Start clips muted",
                     "You can also toggle sound in the player; the choice is remembered.",
                     vm.playMuted, onChange = vm::changePlayMuted)
+                SwitchRow(Icons.Default.Fullscreen, "Fill the screen",
+                    "Upright clips fill the whole screen, with the edges cropped. Off: the whole clip is always shown.",
+                    vm.playerFill, onChange = vm::changePlayerFill)
             }
 
             Section("Auto-sync") {

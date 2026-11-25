@@ -44,9 +44,22 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.withContext
 
 /**
+ * How many previews this phone can play at once: its limit for video decoders running side by
+ * side, less two kept free for the player, and never more than 16.
+ */
+val maxPreviews: Int by lazy {
+    runCatching {
+        android.media.MediaCodecList(android.media.MediaCodecList.REGULAR_CODECS).codecInfos
+            .filter { c -> !c.isEncoder && c.supportedTypes.any { it.equals("video/avc", ignoreCase = true) } }
+            .maxOf { it.getCapabilitiesForType("video/avc").maxSupportedInstances }
+    }.getOrDefault(8).minus(2).coerceIn(4, 16)
+}
+
+/**
  * Which tiles should show a moving preview right now: the first [max] eligible clips on
- * screen, and only once scrolling has stopped. While you scroll, everything is a still (and
- * the video decoders are free), so scrolling stays smooth and nothing off screen plays.
+ * screen. While you scroll, the ones already playing keep playing for as long as they're on
+ * screen; tiles that scroll into view start once scrolling stops (starting a decoder for every
+ * tile flying past would make scrolling stutter). Nothing off screen plays.
  */
 @Composable
 fun rememberActivePreviews(grid: LazyStaggeredGridState, enabled: Boolean, max: Int, changeKey: Any? = null, eligible: (String) -> Boolean): Set<String> {
@@ -57,8 +70,8 @@ fun rememberActivePreviews(grid: LazyStaggeredGridState, enabled: Boolean, max: 
         if (!enabled) { active = emptySet(); return@LaunchedEffect }
         snapshotFlow { grid.isScrollInProgress to grid.layoutInfo.visibleItemsInfo.map { it.key } }
             .collectLatest { (scrolling, keys) ->
-                if (scrolling) { active = emptySet(); return@collectLatest }
-                delay(350) // settle first; a new scroll cancels this
+                if (scrolling) { active = active.filterTo(HashSet()) { it in keys }; return@collectLatest }
+                delay(250) // settle first; a new scroll cancels this
                 active = keys.asSequence().filterIsInstance<String>().filter { isEligible(it) }.take(max).toSet()
             }
     }
