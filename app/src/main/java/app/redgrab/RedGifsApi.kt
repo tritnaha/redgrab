@@ -220,9 +220,15 @@ class RedGifsApi(private val token: String, private val userAgent: String) {
         return OnlinePage(clips, page, j.optInt("pages", 0))
     }
 
-    /** Clips in a niche, sorted the way RedGifs sorts them. */
-    suspend fun nicheClips(nicheId: String, order: OnlineOrder, page: Int, extras: FeedExtras) =
-        onlinePage("v2/niches/${enc(nicheId)}/gifs?count=40&page=$page&order=${order.api}&type=g", page, extras)
+    /**
+     * Clips in a niche. Niche feeds have their own sort names: checked against the site
+     * (2026-11), it accepts hot, latest, best and oldest, and answers HTTP 400 "BadOrder" to
+     * the trending / top7 / top28 that search uses. So: Trending → hot, Newest → latest, any Top → best.
+     */
+    suspend fun nicheClips(nicheId: String, order: OnlineOrder, page: Int, extras: FeedExtras): OnlinePage {
+        val o = when (order) { OnlineOrder.Trending -> "hot"; OnlineOrder.New -> "latest"; else -> "best" }
+        return onlinePage("v2/niches/${enc(nicheId)}/gifs?count=40&page=$page&order=$o&type=g", page, extras)
+    }
 
     /** Site-wide search by free text; an empty query gives the general feed in that order. */
     suspend fun searchClips(query: String, order: OnlineOrder, page: Int, extras: FeedExtras): OnlinePage {

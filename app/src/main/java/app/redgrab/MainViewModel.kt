@@ -135,7 +135,8 @@ sealed interface Feed {
     data class Niche(val id: String, val name: String) : Feed {
         override val title get() = name
         override val source get() = OnlineSource.RedGifs
-        override val orders get() = OnlineOrder.entries
+        // Niche feeds have no "top this week / month"; RedGifs rejects those.
+        override val orders get() = listOf(OnlineOrder.Trending, OnlineOrder.New, OnlineOrder.TopAll)
     }
     data class Performer(val name: String) : Feed {
         override val title get() = name
