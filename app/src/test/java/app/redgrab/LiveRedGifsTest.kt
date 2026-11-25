@@ -52,6 +52,10 @@ class LiveRedGifsTest {
         val api = RedGifsApi(visitorToken(), ua)
         val extras = FeedExtras()
 
+        // A visitor must not pass for a signed-in user (the sign-in screen relies on this check).
+        try { api.checkSignedIn(); org.junit.Assert.fail("a visitor token was accepted as a sign-in") }
+        catch (e: AuthException) { say("sign-in check: a visitor token is refused, as it should be") }
+
         // The Online tab's home feed, a second page of it, and a search.
         val home = api.searchClips("", OnlineOrder.Trending, 1, extras)
         check("Home feed (trending)", home)

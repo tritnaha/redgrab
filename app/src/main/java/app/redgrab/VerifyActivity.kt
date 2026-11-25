@@ -81,6 +81,8 @@ class VerifyActivity : ComponentActivity() {
     @SuppressLint("SetJavaScriptEnabled", "JavascriptInterface")
     private fun turnstileView(ctx: android.content.Context, subject: String): WebView {
         val w = WebView(ctx)
+        // Tell the page the real height (see LoginActivity): a browser view that "wraps its content" reports none.
+        w.layoutParams = android.view.ViewGroup.LayoutParams(android.view.ViewGroup.LayoutParams.MATCH_PARENT, android.view.ViewGroup.LayoutParams.MATCH_PARENT)
         w.settings.javaScriptEnabled = true
         w.settings.domStorageEnabled = true
         library.prefs.userAgent?.let { w.settings.userAgentString = it }

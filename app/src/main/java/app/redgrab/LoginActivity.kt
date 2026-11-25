@@ -158,6 +158,9 @@ class LoginActivity : ComponentActivity() {
     private fun createWebView(ctx: android.content.Context, onProgress: (Int) -> Unit, onNav: (Boolean) -> Unit): WebView {
         val w = WebView(ctx)
         web = w
+        // Without this the page is told the screen has no height (Android does that for a browser
+        // view that "wraps its content"), and sites laid out to fill the screen, like RedGifs, show nothing.
+        w.layoutParams = android.view.ViewGroup.LayoutParams(android.view.ViewGroup.LayoutParams.MATCH_PARENT, android.view.ViewGroup.LayoutParams.MATCH_PARENT)
         CookieManager.getInstance().setAcceptCookie(true)
         CookieManager.getInstance().setAcceptThirdPartyCookies(w, true)
         w.settings.javaScriptEnabled = true
@@ -210,18 +213,22 @@ class LoginActivity : ComponentActivity() {
         val w = web ?: return "Page not ready yet."
         // Another site's page could hold a token of its own choosing: only redgifs.com counts.
         if (!isRedgifs(w.url)) return "Finish signing in on redgifs.com, then tap Done."
-        // Where the site keeps its token (from its own JS): sessionStorage.auth_token,
-        // or JSON {data:{access_token}} under "auth_data" in local/session storage.
+        // Where the site keeps its token. Seen on the site (2026-11): JSON {token} under
+        // "session_data" in localStorage. Older places are still looked at: sessionStorage.auth_token,
+        // and JSON {data:{access_token}} under "auth_data". Every one found is tried.
         val js = """
             (function(){
-              function fromAuthData(s){ try { var j = JSON.parse(s.getItem('auth_data')||'null');
-                return j && j.data && j.data.access_token || null; } catch(e){ return null; } }
-              return sessionStorage.getItem('auth_token') || fromAuthData(localStorage) || fromAuthData(sessionStorage) || null;
+              function at(s, key, path){ try { var j = JSON.parse(s.getItem(key)||'null');
+                for (var i = 0; i < path.length && j; i++) j = j[path[i]];
+                return typeof j === 'string' ? j : null; } catch(e){ return null; } }
+              var found = [at(localStorage,'session_data',['token']), at(sessionStorage,'session_data',['token']),
+                sessionStorage.getItem('auth_token'), at(localStorage,'auth_data',['data','access_token']), at(sessionStorage,'auth_data',['data','access_token'])];
+              return JSON.stringify(found.filter(function(t){ return !!t; }));
             })()
         """.trimIndent()
         val raw = suspendCancellableCoroutine { cont -> w.evaluateJavascript(js) { cont.resume(it) } }
-        val stored = runCatching { JSONTokener(raw).nextValue() as? String }.getOrNull()
-        val candidates = listOfNotNull(stored, seenToken).distinct()
+        val stored = runCatching { org.json.JSONArray(JSONTokener(raw).nextValue() as String).strings() }.getOrDefault(emptyList())
+        val candidates = (stored + listOfNotNull(seenToken)).distinct()
         val ua = w.settings.userAgentString
         val good = withContext(Dispatchers.IO) {
             candidates.firstOrNull { t ->

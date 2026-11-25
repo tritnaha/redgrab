@@ -152,8 +152,13 @@ class RedGifsApi(private val token: String, private val userAgent: String) {
         }
     }
 
+    /**
+     * Passes only for a logged-in user's token. RedGifs also hands a token to visitors who
+     * aren't logged in, and most endpoints (the liked feed included, which just comes back empty)
+     * accept it; the collections list answers 401 "UserTokenRequired" to those.
+     */
     suspend fun checkSignedIn() {
-        get("v2/feeds/liked?page=1&count=10&type=g")
+        get("v2/me/collections?count=10&page=1")
     }
 
     /** Sends the user's Turnstile answer so RedGifs lets requests through again. */

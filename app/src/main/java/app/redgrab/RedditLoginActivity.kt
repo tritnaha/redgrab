@@ -99,6 +99,9 @@ class RedditLoginActivity : ComponentActivity() {
     private fun createWebView(ctx: android.content.Context, url: String, onProgress: (Int) -> Unit, onNav: (Boolean) -> Unit): WebView {
         val w = WebView(ctx)
         web = w
+        // Without this the page is told the screen has no height (Android does that for a browser
+        // view that "wraps its content"), and sites laid out to fill the screen, like RedGifs, show nothing.
+        w.layoutParams = android.view.ViewGroup.LayoutParams(android.view.ViewGroup.LayoutParams.MATCH_PARENT, android.view.ViewGroup.LayoutParams.MATCH_PARENT)
         CookieManager.getInstance().setAcceptCookie(true)
         w.settings.javaScriptEnabled = true
         w.settings.domStorageEnabled = true
