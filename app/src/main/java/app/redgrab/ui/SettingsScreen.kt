@@ -73,6 +73,7 @@ import app.redgrab.BuildConfig
 import app.redgrab.Format
 import app.redgrab.MainViewModel
 import app.redgrab.RedditLoginActivity
+import app.redgrab.Updater
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -80,6 +81,8 @@ fun SettingsScreen(vm: MainViewModel, onSignIn: () -> Unit, onOpenLog: () -> Uni
     val s by vm.state.collectAsStateWithLifecycle()
     var newFolder by remember { mutableStateOf<String?>(null) }
     var confirmForget by remember { mutableStateOf(false) }
+    /** The text typed into "Report a problem" while that dialog is open, else null. */
+    var reporting by remember { mutableStateOf<String?>(null) }
     val pickFolder = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         if (uri != null) vm.setFolder(uri)
     }
@@ -302,9 +305,69 @@ fun SettingsScreen(vm: MainViewModel, onSignIn: () -> Unit, onOpenLog: () -> Uni
 
             Section("About") {
                 Row_(Icons.Default.Info, "RedGrab ${BuildConfig.VERSION_NAME}",
-                    "Unofficial app. Not affiliated with RedGifs.")
+                    "Build ${BuildConfig.VERSION_CODE} · ${BuildConfig.GIT_SHA} · ${BuildConfig.BUILD_DATE}\n" +
+                        "${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL} · Android ${android.os.Build.VERSION.RELEASE}\n" +
+                        "Unofficial app. Not affiliated with RedGifs.")
+                ListItem(
+                    colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+                    modifier = Modifier.clickable {
+                        runCatching { ctx.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(Updater.PAGE))) }
+                    },
+                    leadingContent = { Icon(Icons.Default.Public, null) },
+                    headlineContent = { Text("GitHub") },
+                    supportingContent = { Text(BuildConfig.GITHUB_REPO) },
+                    trailingContent = { Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null) },
+                )
+
+                // Updates from the releases on GitHub.
+                val update by Updater.state.collectAsStateWithLifecycle()
+                val (headline, action) = when (val u = update) {
+                    is Updater.State.Idle -> "Updates" to "Check"
+                    is Updater.State.Checking -> "Checking…" to null
+                    is Updater.State.UpToDate -> "Up to date" to "Check"
+                    is Updater.State.Available -> "Version ${u.release.version} is available" to "Update"
+                    is Updater.State.Downloading -> "Downloading ${u.release.version} · ${u.percent}%" to null
+                    is Updater.State.Ready -> "Version ${u.release.version} is ready" to "Install"
+                    is Updater.State.Installing -> "Installing ${u.release.version}…" to null
+                    is Updater.State.Failed -> u.message to "Try again"
+                }
+                ListItem(
+                    colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+                    leadingContent = { Icon(Icons.Default.Downloading, null) },
+                    headlineContent = { Text(headline) },
+                    supportingContent = {
+                        val notes = (update as? Updater.State.Available)?.release?.notes ?: (update as? Updater.State.Ready)?.release?.notes
+                        Text(notes?.takeIf { it.isNotBlank() }?.lines()?.take(8)?.joinToString("\n") ?: "Last checked: ${Format.ago(vm.library.prefs.lastUpdateCheck)}")
+                    },
+                    trailingContent = {
+                        if (action != null) TextButton(onClick = {
+                            if (update is Updater.State.Available || update is Updater.State.Ready) vm.installUpdate() else vm.checkForUpdate()
+                        }) { Text(action) }
+                    },
+                )
+                SwitchRow(Icons.Default.Sync, "Update automatically",
+                    "Looks for a new release twice a day and installs it when the app isn't in use.",
+                    vm.autoUpdate, onChange = vm::changeAutoUpdate)
+                // The repository is private, so GitHub only answers with a token; the same token files reports.
+                var token by remember(vm.githubToken) { mutableStateOf(vm.githubToken) }
+                OutlinedTextField(token, { token = it.trim() }, singleLine = true, label = { Text("GitHub token") },
+                    visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
+                    supportingText = { Text("Fine-grained token for this repository: Contents read, Issues read and write") },
+                    modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 4.dp))
+                Row(Modifier.padding(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (token != vm.githubToken) Button(onClick = { vm.changeGithubToken(token) }) { Text("Save") }
+                    else if (token.isNotEmpty()) OutlinedButton(onClick = { vm.changeGithubToken("") }) { Text("Remove") }
+                }
             }
             Section("Troubleshooting") {
+                ListItem(
+                    colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+                    modifier = Modifier.clickable { reporting = "" },
+                    leadingContent = { Icon(Icons.Default.Info, null) },
+                    headlineContent = { Text("Report a problem") },
+                    supportingContent = { Text("Gathers the app and phone details and the recent log.") },
+                    trailingContent = { Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null) },
+                )
                 ListItem(
                     colors = ListItemDefaults.colors(containerColor = Color.Transparent),
                     modifier = Modifier.clickable(onClick = onOpenLog),
@@ -319,6 +382,31 @@ fun SettingsScreen(vm: MainViewModel, onSignIn: () -> Unit, onOpenLog: () -> Uni
             }
             Spacer(Modifier.height(24.dp))
         }
+    }
+
+    reporting?.let { text ->
+        AlertDialog(
+            onDismissRequest = { reporting = null },
+            title = { Text("Report a problem") },
+            text = {
+                Column {
+                    OutlinedTextField(text, { reporting = it }, label = { Text("What happened?") }, minLines = 3, maxLines = 6,
+                        modifier = Modifier.fillMaxWidth())
+                    Spacer(Modifier.height(8.dp))
+                    Text("Added automatically:", style = MaterialTheme.typography.labelMedium)
+                    Text(remember { app.redgrab.BugReport.details(ctx) } + "\n+ the recent Activity log (sign-in tokens removed)",
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.height(140.dp).verticalScroll(rememberScrollState()))
+                }
+            },
+            confirmButton = {
+                Row {
+                    TextButton(onClick = { vm.copyReport(text); reporting = null }) { Text("Copy") }
+                    TextButton(enabled = vm.githubToken.isNotEmpty() && !vm.sendingReport, onClick = { vm.sendReport(text); reporting = null }) { Text("Send to GitHub") }
+                }
+            },
+            dismissButton = { TextButton(onClick = { reporting = null }) { Text("Cancel") } },
+        )
     }
 
     newFolder?.let { name ->

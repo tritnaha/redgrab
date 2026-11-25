@@ -166,6 +166,23 @@ class Prefs(context: Context) : RedditStore {
 
     fun redditSignOut() = sp.edit { remove("redditAccess"); remove("redditAccessExp"); remove("redditRefresh"); remove("redditUser") }
 
+    // ---- updates and reports through GitHub ----
+
+    /** A GitHub token that can read the app's repository (needed while it is private) and file reports. */
+    var githubToken: String?
+        get() = sp.getString("githubToken", null)
+        set(v) = sp.edit { putString("githubToken", v) }
+
+    /** Look for new releases in the background and install them when the app isn't in use. */
+    var autoUpdate: Boolean
+        get() = sp.getBoolean("autoUpdate", true)
+        set(v) = sp.edit { putBoolean("autoUpdate", v) }
+
+    /** When GitHub was last asked for the latest release, epoch millis. */
+    var lastUpdateCheck: Long
+        get() = sp.getLong("lastUpdateCheck", 0)
+        set(v) = sp.edit { putLong("lastUpdateCheck", v) }
+
     // ---- Online tab ----
 
     /** The source last shown on the Online tab ([OnlineSource] name). */

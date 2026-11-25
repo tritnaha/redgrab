@@ -6,3 +6,5 @@ local.properties
 *.apk
 .idea/
 captures/
+# The key releases are signed with. It is kept as a repository secret, never in the repository.
+signing/

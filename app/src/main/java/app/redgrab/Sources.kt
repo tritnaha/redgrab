@@ -69,6 +69,8 @@ object SourceHeaders {
         host.on("sex.com") || host.on("sx.cdn.live") -> null to "https://www.sex.com/"
         host.on("erome.com") -> null to "https://www.erome.com/"
         isReddit(host) || host.on("4cdn.org") || host.on("4chan.org") -> null to null
+        // The app's own updates and problem reports.
+        host.on("github.com") || host.on("githubusercontent.com") -> null to null
         else -> "https://www.redgifs.com" to "https://www.redgifs.com/"
     }
 }

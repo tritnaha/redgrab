@@ -40,6 +40,7 @@ class RedGrabApp : Application(), SingletonImageLoader.Factory {
         AppLog.init(this)
         library = Library(this)
         runCatching { SyncWorker.schedule(this) }
+        runCatching { UpdateWorker.schedule(this) }
         // Remove leftover WhatsApp share copies from earlier sessions.
         Thread { runCatching { WhatsAppShare.cleanUp(this) } }.start()
         if (Build.VERSION.SDK_INT >= 26) {
@@ -65,6 +66,8 @@ class RedGrabApp : Application(), SingletonImageLoader.Factory {
     }
 
     companion object {
+        /** True while the app's main screen is on display; an update isn't installed under your hands. */
+        @Volatile var inFront = false
         const val CH_PROGRESS = "progress"
         const val CH_DONE = "done"
     }

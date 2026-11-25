@@ -422,6 +422,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // Housekeeping off the main thread: re-check the folder, drop stale partial downloads,
         // and make sure every saved clip has a thumbnail stored on the phone.
         rescanFolder()
+        lookForUpdate()
         if (!startupRefreshDone && prefs.refreshOnStart && prefs.signedIn) {
             startupRefreshDone = true
             // Offline at launch is normal, not an error: just show what's on the phone.
@@ -468,6 +469,69 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         if (sessionState == Session.State.Expired || sessionState == Session.State.ExpiringSoon) keepSessionAlive()
         verifyNeeded = prefs.pendingVerification != null
         redditUser = if (prefs.redditRefresh != null) prefs.redditUser ?: "" else null
+    }
+
+    // ---- updates and problem reports ---------------------------------------------------
+
+    var autoUpdate by mutableStateOf(prefs.autoUpdate)
+        private set
+    var githubToken by mutableStateOf(prefs.githubToken ?: "")
+        private set
+    var sendingReport by mutableStateOf(false)
+        private set
+
+    fun changeAutoUpdate(v: Boolean) { prefs.autoUpdate = v; autoUpdate = v; UpdateWorker.schedule(getApplication()) }
+
+    fun changeGithubToken(v: String) {
+        val t = v.trim()
+        prefs.githubToken = t.ifEmpty { null }
+        githubToken = t
+        AppLog.i(if (t.isEmpty()) "GitHub token removed" else "GitHub token set")
+        if (t.isNotEmpty()) checkForUpdate()
+    }
+
+    fun checkForUpdate() { viewModelScope.launch { Updater.check(getApplication()) } }
+
+    /** Downloads the newer release (if that isn't done yet) and hands it to Android's installer. */
+    fun installUpdate() {
+        viewModelScope.launch {
+            val app = getApplication<Application>()
+            val release = when (val s = Updater.state.value) {
+                is Updater.State.Available -> s.release
+                is Updater.State.Ready -> s.release
+                else -> Updater.check(app)
+            } ?: return@launch
+            if (Updater.download(app, release)) Updater.install(app, release)
+        }
+    }
+
+    /** On opening the app: look for a newer release (at most every six hours) and fetch it, so it's ready. */
+    private fun lookForUpdate() {
+        if (!prefs.autoUpdate || !isOnline() || System.currentTimeMillis() - prefs.lastUpdateCheck < 6 * 3_600_000L) return
+        viewModelScope.launch {
+            val release = UpdateWorker.updateNow(getApplication(), installIfIdle = false) ?: return@launch
+            if (Updater.state.value is Updater.State.Ready) say("Update ${release.version} is ready. Install it in Settings → About.")
+        }
+    }
+
+    fun copyReport(description: String) {
+        app.redgrab.ui.copyText(getApplication(), "RedGrab report", BugReport.build(getApplication(), description))
+        say("Report copied")
+    }
+
+    /** Files the report as an issue on the app's GitHub repository. */
+    fun sendReport(description: String) {
+        if (sendingReport) return
+        sendingReport = true
+        viewModelScope.launch {
+            val app = getApplication<Application>()
+            val title = description.lineSequence().firstOrNull { it.isNotBlank() }?.trim()
+                ?: "Report: RedGrab ${BuildConfig.VERSION_NAME} on ${android.os.Build.MODEL}"
+            runCatching { Updater.sendReport(app, title, BugReport.build(app, description)) }
+                .onSuccess { AppLog.i("Report sent: $it"); say("Report sent") }
+                .onFailure { AppLog.w("Report not sent: ${it.message}"); say(it.message ?: "The report couldn't be sent.") }
+            sendingReport = false
+        }
     }
 
     private var renewing = false

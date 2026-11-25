@@ -1,0 +1,78 @@
+# Publishes a release when the version in app/build.gradle.kts is one that has no release yet.
+# The app's own updater (Settings → About) picks releases up from here.
+#
+# Needs one repository secret, SIGNING_KEYSTORE_B64: the signing key file, base64-encoded. Every
+# release must be signed with the same key, or Android refuses to install it over the last one.
+name: Release
+
+on:
+  push:
+    branches: [main, online-sources]
+    paths: ['app/build.gradle.kts', '.github/workflows/release.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Read the version
+        id: version
+        run: |
+          name=$(sed -n 's/^ *versionName = "\(.*\)".*/\1/p' app/build.gradle.kts | head -1)
+          build=$(sed -n 's/^ *versionCode = \([0-9]*\).*/\1/p' app/build.gradle.kts | head -1)
+          test -n "$name" && test -n "$build"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          echo "build=$build" >> "$GITHUB_OUTPUT"
+          if gh release view "v$name" > /dev/null 2>&1; then echo "published=true" >> "$GITHUB_OUTPUT"; else echo "published=false" >> "$GITHUB_OUTPUT"; fi
+          echo "Version $name (build $build)"
+
+      - name: Signing key
+        if: steps.version.outputs.published == 'false'
+        env:
+          KEY: ${{ secrets.SIGNING_KEYSTORE_B64 }}
+        run: |
+          if [ -z "$KEY" ]; then
+            echo "::error::The repository secret SIGNING_KEYSTORE_B64 is not set. Without the signing key a release could not update the installed app, so none is published."
+            exit 1
+          fi
+          mkdir -p signing
+          echo "$KEY" | base64 -d > signing/release.keystore
+
+      - uses: actions/setup-java@v4
+        if: steps.version.outputs.published == 'false'
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Build
+        if: steps.version.outputs.published == 'false'
+        run: |
+          echo "sdk.dir=$ANDROID_HOME" > local.properties
+          ./gradlew --no-daemon testDebugUnitTest assembleRelease
+
+      - name: Publish
+        if: steps.version.outputs.published == 'false'
+        env:
+          NAME: ${{ steps.version.outputs.name }}
+          BUILD: ${{ steps.version.outputs.build }}
+        run: |
+          apk="RedGrab-$NAME-$BUILD.apk"
+          cp app/build/outputs/apk/release/app-release.apk "$apk"
+          last=$(gh release list --limit 1 --json tagName --jq '.[0].tagName' 2>/dev/null || true)
+          if [ -n "$last" ] && git rev-parse "$last" > /dev/null 2>&1; then range="$last..HEAD"; else range="-15"; fi
+          git log --no-merges --pretty='- %s' $range | head -40 > notes.md
+          gh release create "v$NAME" "$apk" --title "RedGrab $NAME" --notes-file notes.md --target "$GITHUB_SHA"

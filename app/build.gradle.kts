@@ -1,3 +1,5 @@
+import java.time.LocalDate
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.plugin.compose")
@@ -9,6 +11,15 @@ plugins {
 // Android won't install over an existing app.
 val sideBySide = providers.gradleProperty("sideBySide").isPresent
 
+// The key every release is signed with, so each build can update the one before it. When the
+// file is there (the release workflow writes it from a repository secret) it is used; without
+// it the build falls back to this machine's own debug key, which can't update other builds.
+val sharedKey = rootProject.file("signing/release.keystore")
+
+// The commit this build was made from, for the About screen and problem reports.
+val gitSha = providers.exec { commandLine("git", "rev-parse", "--short", "HEAD"); isIgnoreExitValue = true }
+    .standardOutput.asText.map { it.trim() }.getOrElse("").ifEmpty { "unknown" }
+
 android {
     namespace = "app.redgrab"
     compileSdk = 37
@@ -17,8 +28,12 @@ android {
         applicationId = "app.redgrab"
         minSdk = 26
         targetSdk = 36
-        versionCode = 13
-        versionName = "13.0"
+        // The build number has to go up with every release: the updater compares it.
+        versionCode = 14
+        versionName = "13.1"
+        buildConfigField("String", "GITHUB_REPO", "\"tritnaha/redgrab\"")
+        buildConfigField("String", "GIT_SHA", "\"$gitSha\"")
+        buildConfigField("String", "BUILD_DATE", "\"${LocalDate.now()}\"")
         if (sideBySide) {
             applicationIdSuffix = ".test"
             versionNameSuffix = "-test"
@@ -26,11 +41,20 @@ android {
         manifestPlaceholders["appLabel"] = if (sideBySide) "RedGrab test" else "@string/app_name"
     }
 
+    signingConfigs {
+        if (sharedKey.exists()) create("shared") {
+            // A key made by the Android tools, with their standard password; what is kept private is the file.
+            storeFile = sharedKey
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
-            // Signed with the debug key so the APK can be sideloaded without a keystore.
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.findByName("shared") ?: signingConfigs.getByName("debug")
         }
     }
 

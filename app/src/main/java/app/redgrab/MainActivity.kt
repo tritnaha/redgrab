@@ -217,4 +217,7 @@ class MainActivity : ComponentActivity() {
         super.onResume()
         vm.onResume()
     }
+
+    override fun onStart() { super.onStart(); RedGrabApp.inFront = true }
+    override fun onStop() { RedGrabApp.inFront = false; super.onStop() }
 }

@@ -54,6 +54,30 @@ class PreviewsTest {
         assertEquals(1, app.redgrab.ui.pageAt(0, emptyList(), firstPage = 1))
     }
 
+    @Test fun updaterReadsTheBuildNumberFromTheReleaseFile() {
+        assertEquals(14, Updater.buildOf("RedGrab-13.1-14.apk"))
+        assertEquals(205, Updater.buildOf("RedGrab-14.0-beta-205.APK"))
+        assertEquals(null, Updater.buildOf("RedGrab-13.1.apk"))
+        assertEquals(null, Updater.buildOf("notes.txt"))
+        val r = Updater.parseRelease("""{"tag_name":"v13.2","name":"RedGrab 13.2","body":"- Fix one\n- Fix two","assets":[
+            {"name":"checksums.txt","url":"https://api.github.com/repos/o/r/releases/assets/1","size":10},
+            {"name":"RedGrab-13.2-15.apk","url":"https://api.github.com/repos/o/r/releases/assets/2","size":18153487}]}""")!!
+        assertEquals("13.2", r.version); assertEquals(15, r.build)
+        assertEquals("https://api.github.com/repos/o/r/releases/assets/2", r.assetUrl)
+        assertEquals(18153487L, r.size)
+        assertEquals("- Fix one\n- Fix two", r.notes)
+        assertEquals(null, Updater.parseRelease("""{"tag_name":"v13.2","assets":[]}"""))
+        assertEquals("", Updater.parseRelease("""{"tag_name":"v1","body":null,"assets":[{"name":"a-2.apk","url":"u","size":1}]}""")!!.notes)
+    }
+
+    @Test fun reportsNeverCarrySignInTokens() {
+        val jwt = "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1c2VyLzEyMyIsImV4cCI6MTc5NTczNDQ4N30.c2lnbmF0dXJlLXBhcnQtaGVyZQ"
+        val text = "Signed in with $jwt ok; token github_pat_11ABCDEFG0abcdefghijklmnop_zyxw and ghp_abcdefghijklmnopqrstuvwxyz0123456789 end"
+        val out = BugReport.redact(text)
+        assertEquals("Signed in with [token removed] ok; token [token removed] and [token removed] end", out)
+        assertEquals("Refresh done: 12 clips (3 liked)", BugReport.redact("Refresh done: 12 clips (3 liked)"))
+    }
+
     private fun clip(w: Int, h: Int, hd: String? = "https://x/y.mp4", sd: String? = "https://x/y-sd.mp4", file: String? = null) =
         Clip(id = "c", hd = hd, sd = sd, thumb = null, duration = 5.0, width = w, height = h, hasAudio = false, user = "", created = 0,
             sources = emptySet(), copyFile = file)
