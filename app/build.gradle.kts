@@ -4,6 +4,11 @@ plugins {
     id("com.google.devtools.ksp")
 }
 
+// With -PsideBySide the build is a separate app ("RedGrab test", app.redgrab.test) that installs
+// next to the normal one with its own data. For trying a build signed with another key, which
+// Android won't install over an existing app.
+val sideBySide = providers.gradleProperty("sideBySide").isPresent
+
 android {
     namespace = "app.redgrab"
     compileSdk = 37
@@ -14,6 +19,11 @@ android {
         targetSdk = 36
         versionCode = 13
         versionName = "13.0"
+        if (sideBySide) {
+            applicationIdSuffix = ".test"
+            versionNameSuffix = "-test"
+        }
+        manifestPlaceholders["appLabel"] = if (sideBySide) "RedGrab test" else "@string/app_name"
     }
 
     buildTypes {
