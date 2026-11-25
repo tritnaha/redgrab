@@ -29,8 +29,8 @@ android {
         minSdk = 26
         targetSdk = 36
         // The build number has to go up with every release: the updater compares it.
-        versionCode = 14
-        versionName = "13.1"
+        versionCode = 15
+        versionName = "13.2"
         buildConfigField("String", "GITHUB_REPO", "\"tritnaha/redgrab\"")
         buildConfigField("String", "GIT_SHA", "\"$gitSha\"")
         buildConfigField("String", "BUILD_DATE", "\"${LocalDate.now()}\"")

@@ -78,6 +78,19 @@ class PreviewsTest {
         assertEquals("Refresh done: 12 clips (3 liked)", BugReport.redact("Refresh done: 12 clips (3 liked)"))
     }
 
+    @Test fun aDraggedIndicatorStaysOnTheGrid() {
+        val size = androidx.compose.ui.unit.IntSize(200, 80)
+        val room = androidx.compose.ui.unit.IntSize(1000, 2000)
+        val base = androidx.compose.ui.geometry.Offset(780f, 1700f) // its usual place, near the bottom right
+        fun at(x: Float, y: Float) = app.redgrab.ui.clampOffset(androidx.compose.ui.geometry.Offset(x, y), base, size, room)
+        assertEquals(androidx.compose.ui.geometry.Offset(-300f, -900f), at(-300f, -900f))   // anywhere inside is kept
+        assertEquals(androidx.compose.ui.geometry.Offset(-780f, -1700f), at(-5000f, -5000f)) // not past the top left
+        assertEquals(androidx.compose.ui.geometry.Offset(20f, 220f), at(5000f, 5000f))       // not past the bottom right
+        // A grid smaller than the indicator: it stays at the start rather than jumping about.
+        assertEquals(androidx.compose.ui.geometry.Offset(0f, 0f),
+            app.redgrab.ui.clampOffset(androidx.compose.ui.geometry.Offset(50f, 50f), androidx.compose.ui.geometry.Offset.Zero, size, androidx.compose.ui.unit.IntSize(100, 40)))
+    }
+
     private fun clip(w: Int, h: Int, hd: String? = "https://x/y.mp4", sd: String? = "https://x/y-sd.mp4", file: String? = null) =
         Clip(id = "c", hd = hd, sd = sd, thumb = null, duration = 5.0, width = w, height = h, hasAudio = false, user = "", created = 0,
             sources = emptySet(), copyFile = file)

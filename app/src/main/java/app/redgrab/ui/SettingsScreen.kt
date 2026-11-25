@@ -348,11 +348,11 @@ fun SettingsScreen(vm: MainViewModel, onSignIn: () -> Unit, onOpenLog: () -> Uni
                 SwitchRow(Icons.Default.Sync, "Update automatically",
                     "Looks for a new release twice a day and installs it when the app isn't in use.",
                     vm.autoUpdate, onChange = vm::changeAutoUpdate)
-                // The repository is private, so GitHub only answers with a token; the same token files reports.
+                // Needed to send reports, and to read releases while the repository is private.
                 var token by remember(vm.githubToken) { mutableStateOf(vm.githubToken) }
                 OutlinedTextField(token, { token = it.trim() }, singleLine = true, label = { Text("GitHub token") },
                     visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
-                    supportingText = { Text("Fine-grained token for this repository: Contents read, Issues read and write") },
+                    supportingText = { Text("For sending reports (Issues: read and write). Also needed for updates if the repository is private (Contents: read).") },
                     modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 4.dp))
                 Row(Modifier.padding(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     if (token != vm.githubToken) Button(onClick = { vm.changeGithubToken(token) }) { Text("Save") }
@@ -362,7 +362,7 @@ fun SettingsScreen(vm: MainViewModel, onSignIn: () -> Unit, onOpenLog: () -> Uni
             Section("Troubleshooting") {
                 ListItem(
                     colors = ListItemDefaults.colors(containerColor = Color.Transparent),
-                    modifier = Modifier.clickable { reporting = "" },
+                    modifier = Modifier.clickable { reporting = ""; vm.checkRepoVisibility() },
                     leadingContent = { Icon(Icons.Default.Info, null) },
                     headlineContent = { Text("Report a problem") },
                     supportingContent = { Text("Gathers the app and phone details and the recent log.") },
@@ -392,6 +392,11 @@ fun SettingsScreen(vm: MainViewModel, onSignIn: () -> Unit, onOpenLog: () -> Uni
                 Column {
                     OutlinedTextField(text, { reporting = it }, label = { Text("What happened?") }, minLines = 3, maxLines = 6,
                         modifier = Modifier.fillMaxWidth())
+                    if (vm.githubToken.isNotEmpty() && vm.repoPublic != false) {
+                        Text(if (vm.repoPublic == true) "The repository is public: a report sent to GitHub can be read by anyone. Copy keeps it private."
+                            else "If the repository is public, a report sent to GitHub can be read by anyone.",
+                            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(top = 8.dp))
+                    }
                     Spacer(Modifier.height(8.dp))
                     Text("Added automatically:", style = MaterialTheme.typography.labelMedium)
                     Text(remember { app.redgrab.BugReport.details(ctx) } + "\n+ the recent Activity log (sign-in tokens removed)",

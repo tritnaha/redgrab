@@ -479,6 +479,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         private set
     var sendingReport by mutableStateOf(false)
         private set
+    /** Whether the app's GitHub repository is public (then anyone can read a report sent there); null = not known. */
+    var repoPublic by mutableStateOf<Boolean?>(null)
+        private set
+
+    fun checkRepoVisibility() { viewModelScope.launch { repoPublic = Updater.repoIsPublic(getApplication()) } }
 
     fun changeAutoUpdate(v: Boolean) { prefs.autoUpdate = v; autoUpdate = v; UpdateWorker.schedule(getApplication()) }
 
@@ -1074,6 +1079,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun changePlayMuted(v: Boolean) { prefs.playMuted = v; playMuted = v }
     fun changePlayerFill(v: Boolean) { prefs.playerFill = v; playerFill = v }
+
+    /** Where the page indicator sits, as dragged (pixels from its usual place). */
+    var pillOffset by mutableStateOf(androidx.compose.ui.geometry.Offset(prefs.pillX, prefs.pillY))
+        private set
+    fun changePillOffset(o: androidx.compose.ui.geometry.Offset) { prefs.pillX = o.x; prefs.pillY = o.y; pillOffset = o }
 
     fun browse(f: Facet) {
         facet = f

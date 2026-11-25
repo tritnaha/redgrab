@@ -482,7 +482,8 @@ fun LibraryScreen(vm: MainViewModel, snack: SnackbarHostState, onSignIn: () -> U
             if (pages > 1 && !selecting) {
                 val jumps = rememberCoroutineScope()
                 PositionPill(page, pages, more = false, reach = pages, atTop = atTop,
-                    modifier = Modifier.align(Alignment.BottomEnd).padding(end = 12.dp, bottom = navPad + 12.dp),
+                    modifier = Modifier.align(Alignment.BottomEnd).padding(end = 8.dp, bottom = navPad + 8.dp),
+                    offset = vm.pillOffset, onMoved = vm::changePillOffset,
                     onTop = { jumps.launch { gridState.scrollToItem(0) } },
                     onJump = { n ->
                         jumps.launch {

@@ -87,7 +87,7 @@ object Updater {
         .apply { if (!token.isNullOrBlank()) header("Authorization", "Bearer $token") }
 
     private fun explain(code: Int, hasToken: Boolean) = when {
-        code == 404 && !hasToken -> "GitHub needs a token while the repository is private (Settings → About)."
+        code == 404 && !hasToken -> "No release found. If the repository is private, GitHub needs a token (Settings → About)."
         code == 404 -> "No release found, or the token can't read this repository."
         code == 401 -> "GitHub didn't accept the token."
         code == 403 || code == 429 -> "GitHub refused the request (HTTP $code). Try later."
@@ -202,6 +202,18 @@ object Updater {
     }
 
     internal fun failed(message: String) { _state.value = State.Failed(message) }
+
+    /** Whether the repository is public (anyone can read its issues and releases); null when GitHub can't be asked. */
+    suspend fun repoIsPublic(ctx: Context): Boolean? = withContext(Dispatchers.IO) {
+        runCatching {
+            RedGifsApi.clientFor(ctx.userAgent).newCall(request(API, ctx.library.prefs.githubToken, "application/vnd.github+json").build()).execute().use { r ->
+                // Without a token a private repository answers "not found".
+                if (r.code == 404 && ctx.library.prefs.githubToken.isNullOrBlank()) return@runCatching false
+                if (!r.isSuccessful) return@runCatching null
+                !JSONObject(r.body?.string().orEmpty()).optBoolean("private", true)
+            }
+        }.getOrNull()
+    }
 
     /** Files a report as an issue on the repository. Returns the issue's address. */
     suspend fun sendReport(ctx: Context, title: String, body: String): String = withContext(Dispatchers.IO) {

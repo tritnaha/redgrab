@@ -352,7 +352,8 @@ fun DiscoverScreen(vm: MainViewModel, onSignIn: () -> Unit, onOpenSettings: () -
             val jumps = rememberCoroutineScope()
             PositionPill(page, if (known) d.pages else lastLoaded, more = !known && d.hasMore,
                 reach = if (known) d.pages else lastLoaded, atTop = atTop && d.firstPage == 1,
-                modifier = Modifier.align(Alignment.BottomEnd).padding(end = 12.dp, bottom = navPad + 12.dp),
+                modifier = Modifier.align(Alignment.BottomEnd).padding(end = 8.dp, bottom = navPad + 8.dp),
+                offset = vm.pillOffset, onMoved = vm::changePillOffset,
                 onTop = { if (d.firstPage > 1) vm.jumpToOnlinePage(1) else jumps.launch { grid.scrollToItem(0) } },
                 onJump = { n ->
                     val at = d.pageStarts.getOrNull(n - d.firstPage)

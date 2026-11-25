@@ -47,20 +47,22 @@ import kotlinx.coroutines.withContext
 
 /**
  * How many previews this phone can play at once: its limit for video decoders running side by
- * side, less two kept free for the player, and never more than 16.
+ * side, less one, and never more than 20. (The player needs none of them: previews stop while
+ * a clip is open.)
  */
 val maxPreviews: Int by lazy {
     runCatching {
         android.media.MediaCodecList(android.media.MediaCodecList.REGULAR_CODECS).codecInfos
             .filter { c -> !c.isEncoder && c.supportedTypes.any { it.equals("video/avc", ignoreCase = true) } }
             .maxOf { it.getCapabilitiesForType("video/avc").maxSupportedInstances }
-    }.getOrDefault(8).minus(2).coerceIn(4, 16)
+    }.getOrDefault(8).minus(1).coerceIn(4, 20)
 }
 
 /**
  * How much video this phone can decode at once for previews, counted in full-HD (1080p, 30
- * frames a second) streams: 60% of what its hardware decoder is rated for, so scrolling and the
- * player keep room. Several small previews cost as much as one large one (see [previewCost]).
+ * frames a second) streams: what its hardware decoder is rated for. Several small previews cost
+ * as much as one large one (see [previewCost]). Holding back part of this (60% at first) left
+ * the fourth row of an ordinary three-column grid still on a phone that could play it.
  */
 val previewBudget: Float by lazy {
     val rated = runCatching {
@@ -69,7 +71,7 @@ val previewBudget: Float by lazy {
             .filter { android.os.Build.VERSION.SDK_INT < 29 || it.isHardwareAccelerated }
             .maxOf { c -> runCatching { c.getCapabilitiesForType("video/avc").videoCapabilities?.getSupportedFrameRatesFor(1920, 1080)?.upper ?: 0.0 }.getOrDefault(0.0) }
     }.getOrDefault(0.0).takeIf { it > 0 } ?: 150.0
-    (rated / 30.0 * 0.6).toFloat().coerceIn(3f, 16f)
+    (rated / 30.0).toFloat().coerceIn(4f, 24f)
 }
 
 /**

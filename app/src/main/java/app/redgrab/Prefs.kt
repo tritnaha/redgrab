@@ -183,6 +183,14 @@ class Prefs(context: Context) : RedditStore {
         get() = sp.getLong("lastUpdateCheck", 0)
         set(v) = sp.edit { putLong("lastUpdateCheck", v) }
 
+    /** Where the page indicator was dragged to, in pixels from its usual place (bottom right). */
+    var pillX: Float
+        get() = sp.getFloat("pillX", 0f)
+        set(v) = sp.edit { putFloat("pillX", v) }
+    var pillY: Float
+        get() = sp.getFloat("pillY", 0f)
+        set(v) = sp.edit { putFloat("pillY", v) }
+
     // ---- Online tab ----
 
     /** The source last shown on the Online tab ([OnlineSource] name). */
