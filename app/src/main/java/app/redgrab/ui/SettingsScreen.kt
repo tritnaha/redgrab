@@ -96,7 +96,7 @@ fun SettingsScreen(vm: MainViewModel, onSignIn: () -> Unit, onOpenLog: () -> Uni
         ) {
             Section("Account") {
                 Row_(Icons.Default.AccountCircle, if (vm.signedIn) "Signed in to RedGifs" else "Not signed in",
-                    if (vm.signedIn) vm.sessionText + ". Renewing reopens RedGifs; if it still knows you, it closes by itself."
+                    if (vm.signedIn) vm.sessionText + ". Renewed by itself in the background."
                     else "Needed to read your likes and collections.")
                 Row(Modifier.padding(start = 16.dp, end = 16.dp, bottom = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(onClick = onSignIn) { Text(if (vm.signedIn) "Renew session" else "Sign in") }
@@ -214,7 +214,7 @@ fun SettingsScreen(vm: MainViewModel, onSignIn: () -> Unit, onOpenLog: () -> Uni
                     "You can also toggle sound in the player; the choice is remembered.",
                     vm.playMuted, onChange = vm::changePlayMuted)
                 SwitchRow(Icons.Default.Fullscreen, "Fill the screen",
-                    "Upright clips fill the whole screen, with the edges cropped. Off: the whole clip is always shown.",
+                    "Off: a clip opens as a larger view over the grid; tap beside it to go back. On: upright clips cover the whole screen, edges cropped.",
                     vm.playerFill, onChange = vm::changePlayerFill)
             }
 

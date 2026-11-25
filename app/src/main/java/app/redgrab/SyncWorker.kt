@@ -45,7 +45,10 @@ class SyncWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, 
     override suspend fun doWork(): Result {
         val lib = applicationContext.library
         if (!lib.prefs.signedIn || lib.state.value.watched.isEmpty()) return Result.success()
-        if (Session.state(lib.prefs) == Session.State.Expired) { notify("Sign in again to keep syncing"); return Result.success() }
+        // An expired session is renewed out of sight; only when that doesn't work are you asked to sign in.
+        if (Session.state(lib.prefs) == Session.State.Expired && !SessionRenewer.renew(applicationContext)) {
+            notify("Sign in again to keep syncing"); return Result.success()
+        }
         AppLog.i("Background sync started")
         val result = lib.refresh()
         result.exceptionOrNull()?.let { e ->

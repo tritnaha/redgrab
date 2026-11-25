@@ -31,6 +31,8 @@ import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.material.icons.filled.FitScreen
 import androidx.compose.material.icons.filled.ZoomOutMap
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.boundsInParent
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -163,6 +165,8 @@ fun PlayerScreen(vm: MainViewModel, session: PlayerSession) {
     /** Width and height of what's showing (from the site, else from the video or picture itself); 0 = not known yet. */
     var mediaSize by remember { mutableStateOf(0 to 0) }
     var boxSize by remember { mutableStateOf(IntSize.Zero) }
+    /** Where on the screen the clip may be drawn (the screen less a margin, unless it fills the screen). */
+    var frame by remember { mutableStateOf(androidx.compose.ui.geometry.Rect.Zero) }
 
     val ua = remember { vm.library.prefs.userAgent ?: runCatching { WebSettings.getDefaultUserAgent(ctx) }.getOrDefault("Mozilla/5.0") }
     // Saved files: read straight from the phone. Unsaved clips: stream through a local cache.
@@ -305,26 +309,29 @@ fun PlayerScreen(vm: MainViewModel, session: PlayerSession) {
         onDispose { lifecycle.removeObserver(obs); exo.release() }
     }
 
-    // The player takes the whole screen: the status and navigation bars stay hidden while it's open
-    // (a swipe from the edge shows them briefly). "Fullscreen" additionally hides the player's own controls.
-    DisposableEffect(Unit) {
+    // Immersive fullscreen (the button that hides the controls): hide status and navigation bars too.
+    DisposableEffect(fullscreen) {
         val window = (view.context as? Activity)?.window
         if (window != null) {
             val ctl = WindowCompat.getInsetsController(window, view)
-            ctl.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-            ctl.hide(WindowInsetsCompat.Type.systemBars())
+            if (fullscreen) {
+                ctl.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+                ctl.hide(WindowInsetsCompat.Type.systemBars())
+            } else ctl.show(WindowInsetsCompat.Type.systemBars())
         }
         onDispose { if (window != null) WindowCompat.getInsetsController(window, view).show(WindowInsetsCompat.Type.systemBars()) }
     }
 
-    // How the clip sits on the screen. With "Fill the screen" on, a clip that is the same way up as
-    // the screen covers all of it (edges cropped). Otherwise the whole clip is shown as large as it
-    // fits, over a dimmed view of what's behind, and a tap beside it closes the player.
+    // How the clip sits on the screen. Normally it is a larger view laid over the grid: shown
+    // whole, with a margin, and the grid you came from stays visible (dimmed) around it; a tap
+    // beside the clip takes you back to exactly where you were. With "Fill the screen" on, a clip
+    // that is the same way up as the screen covers all of it instead (edges cropped).
     val aspect = if (mediaSize.second > 0) mediaSize.first.toFloat() / mediaSize.second else 0f
     val screenAspect = if (boxSize.height > 0) boxSize.width.toFloat() / boxSize.height else 0f
     val cover = vm.playerFill && (aspect == 0f || screenAspect == 0f || (aspect < 1f) == (screenAspect < 1f))
     val coverNow by rememberUpdatedState(cover)
     val aspectNow by rememberUpdatedState(aspect)
+    val frameNow by rememberUpdatedState(frame)
     val scale = if (cover) ContentScale.Crop else ContentScale.Fit
 
     BackHandler { if (fullscreen) fullscreen = false else vm.closePlayer() }
@@ -339,7 +346,13 @@ fun PlayerScreen(vm: MainViewModel, session: PlayerSession) {
         else { exo.play(); playing = true; show(Icons.Default.PlayArrow) }
     }
 
-    Box(Modifier.fillMaxSize().onSizeChanged { boxSize = it }.background(Color.Black.copy(alpha = if (cover) 1f else 0.88f))) {
+    Box(Modifier.fillMaxSize().onSizeChanged { boxSize = it }.background(Color.Black.copy(alpha = if (cover) 1f else 0.6f))) {
+      // The clip's frame: the whole screen when it fills it, otherwise inset so the grid shows around it.
+      Box(
+        (if (cover) Modifier.fillMaxSize()
+        else Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing).padding(horizontal = 16.dp, vertical = 56.dp))
+            .onGloballyPositioned { frame = it.boundsInParent() }
+      ) {
         AndroidView(
             modifier = Modifier.fillMaxSize(),
             factory = { c ->
@@ -365,6 +378,7 @@ fun PlayerScreen(vm: MainViewModel, session: PlayerSession) {
         if (!firstFrame && imageUri == null) {
             AsyncImage(thumbModel(s, vm.library, clip), null, contentScale = scale, modifier = Modifier.fillMaxSize())
         }
+      }
 
         // Gesture layer. On the clip: left quarter = previous, right quarter = next, middle = play/pause.
         // Beside the clip (when it doesn't cover the screen): close. Swipe sideways to navigate, down to close.
@@ -373,15 +387,16 @@ fun PlayerScreen(vm: MainViewModel, session: PlayerSession) {
                 .pointerInput(session.index, session.ids.size) {
                     detectTapGestures { o ->
                         val w = size.width.toFloat()
-                        val h = size.height.toFloat()
                         val a = aspectNow
-                        // The part of the screen the clip takes up when it's shown whole.
-                        val onClip = coverNow || a <= 0f || h <= 0f || run {
-                            val wide = w / h > a
-                            val mw = if (wide) h * a else w
-                            val mh = if (wide) h else w / a
-                            kotlin.math.abs(o.x - w / 2) <= mw / 2 && kotlin.math.abs(o.y - h / 2) <= mh / 2
-                        }
+                        val f = frameNow
+                        // The part of the screen the clip itself takes up: all of it when it fills the screen,
+                        // otherwise its own shape fitted into the frame (the whole frame while its shape isn't known).
+                        val onClip = coverNow || f.isEmpty || (if (a <= 0f) f.contains(o) else {
+                            val wide = f.width / f.height > a
+                            val mw = if (wide) f.height * a else f.width
+                            val mh = if (wide) f.height else f.width / a
+                            kotlin.math.abs(o.x - f.center.x) <= mw / 2 && kotlin.math.abs(o.y - f.center.y) <= mh / 2
+                        })
                         when {
                             !onClip -> vm.closePlayer()
                             o.x < w * 0.25f -> prev()

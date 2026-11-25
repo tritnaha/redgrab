@@ -451,9 +451,24 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         if (signedIn) needsSignIn = false
         sessionState = Session.state(prefs)
         sessionText = Session.describe(prefs)
-        if (sessionState == Session.State.Expired) needsSignIn = true
+        // A session that has run out is renewed out of sight; only if that fails are you asked to sign in.
+        if (sessionState == Session.State.Expired || sessionState == Session.State.ExpiringSoon) keepSessionAlive()
         verifyNeeded = prefs.pendingVerification != null
         redditUser = if (prefs.redditRefresh != null) prefs.redditUser ?: "" else null
+    }
+
+    private var renewing = false
+
+    private fun keepSessionAlive() {
+        if (renewing || !isOnline()) return
+        renewing = true
+        viewModelScope.launch {
+            val ok = SessionRenewer.renew(getApplication())
+            renewing = false
+            sessionState = Session.state(prefs)
+            sessionText = Session.describe(prefs)
+            if (ok) needsSignIn = false else if (sessionState == Session.State.Expired) needsSignIn = true
+        }
     }
 
     // ---- sync -----------------------------------------------------------------
@@ -468,7 +483,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             return
         }
         viewModelScope.launch {
-            library.refresh().onSuccess {
+            library.refresh().also { sessionState = Session.state(prefs); sessionText = Session.describe(prefs) }.onSuccess {
                 needsSignIn = false
                 val s = state.value
                 // Auto-sync: anything new in the collections you marked gets downloaded right away.
@@ -772,9 +787,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * full clip in place of the bare one in the player and the feed. Null if RedGifs can't be asked.
      */
     suspend fun resolveOnline(c: Clip): Clip? = withContext(Dispatchers.IO) {
-        val token = prefs.token ?: return@withContext null
-        val ua = prefs.userAgent ?: return@withContext null
-        val fresh = runCatching { RedGifsApi(token, ua).clip(c.id) }
+        if (!prefs.signedIn) return@withContext null
+        val fresh = runCatching { withRedGifs(getApplication()) { it.clip(c.id) } }
             .onFailure { AppLog.w("Could not get ${c.id} from RedGifs: ${it.message}") }.getOrNull() ?: return@withContext null
         val full = library.resolveNiches(fresh.copy(sources = c.sources, thumb = fresh.thumb ?: c.thumb,
             description = fresh.description.ifBlank { c.description }))
@@ -786,7 +800,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     suspend fun refreshClip(c: Clip): Clip? = withContext(Dispatchers.IO) {
         runCatching {
             when (OnlineSource.of(c.id)) {
-                OnlineSource.RedGifs -> RedGifsApi(prefs.token!!, prefs.userAgent!!).clip(c.id)
+                OnlineSource.RedGifs -> withRedGifs(getApplication()) { it.clip(c.id) }
                 OnlineSource.FikFap -> FikFapApi(RedGifsApi.clientFor(getApplication<Application>().userAgent)).post(c.id.removePrefix(OnlineSource.FikFap.prefix))
                 else -> null
             }
@@ -928,7 +942,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private suspend fun fetchPage(d: DiscoverState, next: Int): OnlinePage {
         suspend fun redgifs(load: suspend (RedGifsApi, FeedExtras) -> OnlinePage): OnlinePage {
             val extras = FeedExtras()
-            val page = load(RedGifsApi(prefs.token!!, prefs.userAgent!!), extras)
+            val page = withRedGifs(getApplication()) { load(it, extras) }
             library.learn(extras)
             return page.copy(clips = page.clips.map(library::resolveNiches))
         }
@@ -952,10 +966,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun loadFollowedNiches(force: Boolean = false) {
         if (sfw) return
         if (discover.nichesLoaded && !force) return
-        val token = prefs.token ?: return; val ua = prefs.userAgent ?: return
+        if (!prefs.signedIn) return
         viewModelScope.launch {
             val list = withContext(Dispatchers.IO) {
-                runCatching { RedGifsApi(token, ua).followedNiches() }
+                runCatching { withRedGifs(getApplication()) { it.followedNiches() } }
                     .onFailure { AppLog.w("Could not read followed niches: ${it.message}") }.getOrNull()
             }
             discover = discover.copy(niches = list ?: discover.niches, nichesLoaded = true)

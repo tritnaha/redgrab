@@ -56,6 +56,10 @@ class LiveRedGifsTest {
         try { api.checkSignedIn(); org.junit.Assert.fail("a visitor token was accepted as a sign-in") }
         catch (e: AuthException) { say("sign-in check: a visitor token is refused, as it should be") }
 
+        // The likes request itself is accepted (a visitor simply has none): the feed, then the list of liked IDs.
+        assertTrue(api.likedClips(extras) { _, _, _ -> }.isEmpty())
+        say("likes: the liked feed and the liked-ID list both answer (empty for a visitor)")
+
         // The Online tab's home feed, a second page of it, and a search.
         val home = api.searchClips("", OnlineOrder.Trending, 1, extras)
         check("Home feed (trending)", home)

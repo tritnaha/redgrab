@@ -103,9 +103,12 @@ class Prefs(context: Context) : RedditStore {
         get() = sp.getInt("previewCount", 0)
         set(v) = sp.edit { putInt("previewCount", v.coerceIn(0, 6)) }
 
-    /** In the player, upright clips fill the whole screen (edges cropped) instead of being shown whole. */
+    /**
+     * In the player, upright clips fill the whole screen (edges cropped). Off (the default): a
+     * clip opens as a larger view over the grid, which stays visible around it.
+     */
     var playerFill: Boolean
-        get() = sp.getBoolean("playerFill", true)
+        get() = sp.getBoolean("playerFill", false)
         set(v) = sp.edit { putBoolean("playerFill", v) }
 
     /** Library layout: false = even grid, true = wall (each preview keeps its own shape). */

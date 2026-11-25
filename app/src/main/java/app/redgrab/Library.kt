@@ -340,6 +340,14 @@ class Library(private val ctx: Context) {
 
     /** Re-reads likes and collections from RedGifs and re-checks the folder. */
     suspend fun refresh(): Result<Unit> = refreshLock.withLock {
+        // A session that has run out, or is about to, is renewed out of sight first.
+        if (prefs.signedIn && Session.state(prefs).let { it == Session.State.Expired || it == Session.State.ExpiringSoon }) SessionRenewer.renew(ctx)
+        val first = sync()
+        // RedGifs turned the session down mid-way (it also does when the network changed): renew once and start over.
+        if (first.exceptionOrNull() is AuthException && SessionRenewer.renew(ctx)) sync() else first
+    }
+
+    private suspend fun sync(): Result<Unit> =
         withContext(Dispatchers.IO) {
             val token = prefs.token
             val ua = prefs.userAgent
@@ -433,7 +441,6 @@ class Library(private val ctx: Context) {
                 Result.failure(e)
             }
         }
-    }
 
     private fun status(msg: String) = _state.update { it.copy(refreshMessage = msg) }
 

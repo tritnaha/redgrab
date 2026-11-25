@@ -384,7 +384,8 @@ class DownloadWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(c
 
         /** A fresh copy of the clip from its own site (new media addresses), where the site offers that. */
         suspend fun fresh(): Clip? = when (OnlineSource.of(clip.id)) {
-            OnlineSource.RedGifs -> api?.clip(clip.id)
+            // The session may have run out during a long run; it is renewed out of sight when needed.
+            OnlineSource.RedGifs -> if (api == null) null else withRedGifs(applicationContext) { it.clip(clip.id) }
             OnlineSource.FikFap -> FikFapApi(http).post(clip.id.removePrefix(OnlineSource.FikFap.prefix))
             else -> null
         }?.also { lib.replaceClip(it) }

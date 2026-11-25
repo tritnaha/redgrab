@@ -118,13 +118,20 @@ class RedGifsApi(private val token: String, private val userAgent: String) {
             return r
         }
 
+        /** The Likes page of the site asks for 30 at a time. */
+        private const val LIKES_PER_PAGE = 30
+        /** When likes have to be looked up one by one, stop at this many. */
+        private const val MAX_LIKES_BY_ID = 600
+
         /** Cloudflare Turnstile site key used by www.redgifs.com for its human check. */
         const val TURNSTILE_SITE_KEY = "0x4AAAAAAAVj1T69HYyETNAA"
     }
 
     val http: OkHttpClient = clientFor(userAgent)
 
-    private suspend fun get(path: String): JSONObject {
+    private suspend fun get(path: String): JSONObject = JSONObject(getText(path))
+
+    private suspend fun getText(path: String): String {
         var attempt = 0
         while (true) {
             val req = Request.Builder()
@@ -144,7 +151,7 @@ class RedGifsApi(private val token: String, private val userAgent: String) {
                         AppLog.w("Rate limited on ${path.substringBefore('?')}, waiting before retry")
                     }
                     !r.isSuccessful -> throw HttpException(r.code, "HTTP ${r.code} for ${path.substringBefore('?')}: ${body.take(200)}")
-                    else -> return JSONObject(body)
+                    else -> return body
                 }
             }
             attempt++
@@ -172,8 +179,32 @@ class RedGifsApi(private val token: String, private val userAgent: String) {
         }
     }
 
-    suspend fun likedClips(extras: FeedExtras, onPage: suspend (page: Int, pages: Int, total: Int) -> Unit): List<Clip> =
-        paged("v2/feeds/liked?count=100&type=g", "Liked", extras, onPage)
+    /**
+     * Everything you've liked. Asked for exactly as the site's own Likes page asks (30 at a
+     * time). If that feed comes back empty, the list of liked IDs is used instead and each clip
+     * is looked up on its own.
+     */
+    suspend fun likedClips(extras: FeedExtras, onPage: suspend (page: Int, pages: Int, total: Int) -> Unit): List<Clip> {
+        val fromFeed = paged("v2/feeds/liked?count=$LIKES_PER_PAGE&type=g", "Liked", extras, LIKES_PER_PAGE, onPage)
+        if (fromFeed.isNotEmpty()) return fromFeed
+        val ids = runCatching {
+            val t = getText("v2/likes").trim()
+            val arr = if (t.startsWith("[")) JSONArray(t)
+            else JSONObject(t).let { it.optJSONArray("likes") ?: it.optJSONArray("gifs") ?: it.optJSONArray("items") ?: JSONArray() }
+            (0 until arr.length()).mapNotNull { i ->
+                when (val v = arr.opt(i)) { is String -> v; is JSONObject -> v.optString("id").ifEmpty { v.optString("gifId") }; else -> null }
+            }.map { it.lowercase() }.filter { Clip.validId(it) }.distinct()
+        }.onFailure { if (it is AuthException) throw it; AppLog.w("Could not read the list of liked IDs: ${it.message}") }.getOrDefault(emptyList())
+        AppLog.i("The liked feed came back empty; RedGifs' list of liked IDs has ${ids.size}")
+        val out = ArrayList<Clip>()
+        for ((i, id) in ids.take(MAX_LIKES_BY_ID).withIndex()) {
+            onPage(i + 1, ids.size.coerceAtMost(MAX_LIKES_BY_ID), ids.size)
+            try { clip(id)?.let { out += it.copy(sources = setOf("Liked")) } }
+            catch (e: HttpException) { if (e.code == 429) throw e } // a removed clip: leave it out
+            delay(120)
+        }
+        return out
+    }
 
     suspend fun myCollections(): List<RgCollection> {
         val out = mutableListOf<RgCollection>()
@@ -197,7 +228,7 @@ class RedGifsApi(private val token: String, private val userAgent: String) {
     }
 
     suspend fun collectionClips(c: RgCollection, extras: FeedExtras): List<Clip> =
-        paged("v2/me/collections/${c.id}/gifs?count=100", c.name, extras) { _, _, _ -> }.map { it.copy(colIds = setOf(c.id)) }
+        paged("v2/me/collections/${c.id}/gifs?count=100", c.name, extras, 100) { _, _, _ -> }.map { it.copy(colIds = setOf(c.id)) }
 
     /** Fresh copy of one clip (new media URLs if the old ones stopped working). */
     suspend fun clip(id: String): Clip? =
@@ -260,17 +291,26 @@ class RedGifsApi(private val token: String, private val userAgent: String) {
         get("v2/niches/$id").let { j -> (j.optJSONObject("niche") ?: j).optString("name").takeIf { it.isNotBlank() } }
     }.getOrNull()
 
-    private suspend fun paged(base: String, source: String, extras: FeedExtras, onPage: suspend (Int, Int, Int) -> Unit): List<Clip> {
+    private suspend fun paged(base: String, source: String, extras: FeedExtras, perPage: Int, onPage: suspend (Int, Int, Int) -> Unit): List<Clip> {
         val out = mutableListOf<Clip>()
         var page = 1
         while (true) {
             val j = get("$base&page=$page")
             val arr = j.optJSONArray("gifs") ?: j.optJSONArray("items") ?: JSONArray()
+            val before = out.size
             for (i in 0 until arr.length()) parseClip(arr.getJSONObject(i), source)?.let(out::add)
             collectExtras(j, extras)
             val pages = j.optInt("pages", 0)
+            if (page == 1) {
+                // What RedGifs answered, so an empty list can be told from a list the app couldn't read.
+                AppLog.i("$source: first page has ${arr.length()} item(s), ${out.size - before} usable; RedGifs reports ${j.optInt("total", 0)} in $pages page(s)")
+                if (arr.length() == 0) AppLog.i("$source: the empty answer holds " + j.keys().asSequence().sorted().joinToString(", ") { k ->
+                    val v: Any? = j.opt(k)
+                    "$k=" + when (v) { is JSONArray -> "[${v.length()}]"; is JSONObject -> "{${v.length()}}"; null -> "null"; else -> v.toString().take(20) }
+                })
+            }
             onPage(page, pages, j.optInt("total", 0))
-            if (arr.length() == 0 || pages in 1..page || (pages == 0 && arr.length() < 100)) break
+            if (arr.length() == 0 || pages in 1..page || (pages == 0 && arr.length() < perPage)) break
             page++
             delay(250)
         }
