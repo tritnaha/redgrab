@@ -42,9 +42,12 @@ data class Performer(val username: String, val name: String, val verified: Boole
 /** A RedGifs niche (community), e.g. from the list of niches you follow. */
 data class NicheInfo(val id: String, val name: String, val thumb: String?, val clips: Long, val subscribers: Long)
 
-/** One page of an online feed. */
-data class OnlinePage(val clips: List<Clip>, val page: Int, val pages: Int) {
-    val hasMore get() = if (pages > 0) page < pages else clips.isNotEmpty()
+/**
+ * One page of an online feed. Feeds without page numbers (Reddit, FikFap) continue from
+ * [cursor] and say in [more] whether anything follows.
+ */
+data class OnlinePage(val clips: List<Clip>, val page: Int, val pages: Int, val cursor: String? = null, val more: Boolean? = null) {
+    val hasMore get() = more ?: if (pages > 0) page < pages else clips.isNotEmpty()
 }
 
 /** Sort orders RedGifs' own site uses for online feeds. */
@@ -81,17 +84,39 @@ class RedGifsApi(private val token: String, private val userAgent: String) {
             .retryOnConnectionFailure(true)
             .build()
 
+        /**
+         * Adds the user agent and the Origin/Referer the request's site expects (see
+         * [SourceHeaders]) to every request: API calls, downloads, thumbnails and streaming.
+         */
         fun clientFor(userAgent: String): OkHttpClient = base.newBuilder()
             .addInterceptor { chain ->
-                chain.proceed(
-                    chain.request().newBuilder()
-                        .header("User-Agent", userAgent)
-                        .header("Origin", "https://www.redgifs.com")
-                        .header("Referer", "https://www.redgifs.com/")
-                        .build()
-                )
+                val req = chain.request()
+                val host = req.url.host
+                val b = req.newBuilder()
+                // Reddit's API gets the app's own name (set on the request); everything else the browser's.
+                if (req.header("User-Agent") == null || !SourceHeaders.isReddit(host)) b.header("User-Agent", userAgent)
+                val (origin, referer) = SourceHeaders.forHost(host)
+                origin?.let { b.header("Origin", it) }
+                referer?.let { b.header("Referer", it) }
+                chain.proceed(b.build())
             }
             .build()
+
+        /**
+         * Opens a media download. With [fromByte] > 0 asks for the rest of a partly saved file
+         * (HTTP Range); check [Response.code] == 206 to know whether the server resumed.
+         */
+        fun download(http: OkHttpClient, url: String, fromByte: Long = 0): Response {
+            val req = Request.Builder().url(url).apply { if (fromByte > 0) header("Range", "bytes=$fromByte-") }.build()
+            val r = http.newCall(req).execute()
+            if (!r.isSuccessful) {
+                val code = r.code
+                val total = r.header("Content-Range")?.substringAfter('/', "")?.toLongOrNull() ?: -1
+                r.close()
+                throw HttpException(code, "HTTP $code downloading clip", total)
+            }
+            return r
+        }
 
         /** Cloudflare Turnstile site key used by www.redgifs.com for its human check. */
         const val TURNSTILE_SITE_KEY = "0x4AAAAAAAVj1T69HYyETNAA"
@@ -301,19 +326,4 @@ class RedGifsApi(private val token: String, private val userAgent: String) {
         )
     }
 
-    /**
-     * Opens a media download. With [fromByte] > 0 asks for the rest of a partly saved file
-     * (HTTP Range); check [Response.code] == 206 to know whether the server resumed.
-     */
-    fun download(url: String, fromByte: Long = 0): Response {
-        val req = Request.Builder().url(url).apply { if (fromByte > 0) header("Range", "bytes=$fromByte-") }.build()
-        val r = http.newCall(req).execute()
-        if (!r.isSuccessful) {
-            val code = r.code
-            val total = r.header("Content-Range")?.substringAfter('/', "")?.toLongOrNull() ?: -1
-            r.close()
-            throw HttpException(code, "HTTP $code downloading clip", total)
-        }
-        return r
-    }
 }

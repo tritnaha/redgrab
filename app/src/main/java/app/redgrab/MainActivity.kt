@@ -152,7 +152,7 @@ class MainActivity : ComponentActivity() {
                                 0 -> LibraryScreen(vm, snack, onSignIn = openSignIn, onOpenSettings = { tab = 3 })
                                 1 -> BrowseScreen(vm, onOpen = { tab = 0 })
                                 2 -> LogScreen(snack, onBack = { tab = 3 })
-                                4 -> DiscoverScreen(vm, onSignIn = openSignIn)
+                                4 -> DiscoverScreen(vm, onSignIn = openSignIn, onOpenSettings = { tab = 3 })
                                 else -> SettingsScreen(vm, onSignIn = openSignIn, onOpenLog = { tab = 2 }, logHasErrors = hasNewErrors)
                             }
                         }

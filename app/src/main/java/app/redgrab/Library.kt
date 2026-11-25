@@ -64,10 +64,19 @@ data class Clip(
     fun url(preferHd: Boolean): String? = if (preferHd) hd ?: sd else sd ?: hd
     fun url(q: Quality): String? = when (q) { Quality.HD -> hd; Quality.SD -> sd; Quality.LEGACY -> hd ?: sd }
     val isCopy get() = copyOf != null
-    /** A file you imported from a folder on the phone (not from RedGifs). */
+    /** A file kept in the save folder's "imported" subfolder: one you imported, or a picture saved from online. */
     val imported get() = copyOf == null && copyFile != null
-    /** A picture file (GIF, WebP...) rather than a video; shown with the image viewer. */
-    val isImage get() = copyFile?.substringAfterLast('.', "")?.lowercase() in IMAGE_EXT
+    /**
+     * File type, lower case: of the file on the phone, else of the online address. Reddit's MP4
+     * copies of GIFs keep ".gif" in their address (with "format=mp4"), so those count as MP4.
+     */
+    val fileExt: String by lazy {
+        copyFile?.substringAfterLast('.', "")?.lowercase()
+            ?: hd?.takeIf { "format=mp4" !in it }?.substringBefore('?')?.substringAfterLast('/')?.substringAfterLast('.', "")?.lowercase()
+            ?: ""
+    }
+    /** A picture (GIF, WebP...) rather than a video; shown with the image viewer. Online GIFs count too. */
+    val isImage get() = fileExt in IMAGE_EXT
     /** In your RedGifs likes. */
     val liked get() = "Liked" in sources
 
@@ -266,6 +275,7 @@ class Library(private val ctx: Context) {
             raw = store.clips(ClipRow.LIBRARY).map { it.toClip() }
             extras = store.clips(ClipRow.EXTRA).map { it.toClip() }
             imports = store.clips(ClipRow.IMPORTED).map { it.toClip() }
+            extras.forEach { if (OnlineSource.of(it.id) == OnlineSource.FikFap) SourceHeaders.learnFikFap(it.hd) }
             overrides = store.overrides().associate { it.id to it.toOverride() }
             copies = store.copies().map { it.toCopy() }
             hidden = store.hidden().toSet()
@@ -744,7 +754,8 @@ class Library(private val ctx: Context) {
         val known = raw.any { it.id == c.id } || extras.any { it.id == c.id }
         if (known && !wasHidden) return@synchronized
         if (!known) {
-            extras = extras + c.copy(sources = setOf("Discover"))
+            // Keeps where it was found ("Reddit", "FikFap"); RedGifs clips are "Discover".
+            extras = extras + c.copy(sources = c.sources.filterTo(LinkedHashSet()) { it in OnlineSource.SAVED_LABELS }.ifEmpty { setOf("Discover") })
             store.putClips(listOf(ClipRow.of(extras.last(), ClipRow.EXTRA, (store.clips(ClipRow.EXTRA).lastOrNull()?.pos ?: -1) + 1)))
         }
         val clips = compose()
@@ -830,6 +841,32 @@ class Library(private val ctx: Context) {
         }
         val clips = compose()
         _state.update { it.copy(clips = clips) }
+    }
+
+    /**
+     * Fills in a clip's size, length and whether it has sound from its saved file, for clips
+     * whose site didn't say (FikFap gives no size, Reddit no length for GIFs).
+     */
+    fun learnFromFile(id: String, file: Uri) {
+        val c = synchronized(lock) { extras.firstOrNull { it.id == id } } ?: return
+        if (c.width > 0 && c.height > 0 && c.duration > 0) return
+        runCatching {
+            val r = android.media.MediaMetadataRetriever()
+            try {
+                r.setDataSource(ctx, file)
+                fun num(key: Int) = r.extractMetadata(key)?.toLongOrNull() ?: 0L
+                var w = num(android.media.MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH).toInt()
+                var h = num(android.media.MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT).toInt()
+                // A video stored sideways is shown turned: swap so the tile gets the shape you see.
+                if (num(android.media.MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION).toInt() % 180 != 0) w = h.also { h = w }
+                val sized = c.width > 0 && c.height > 0
+                replaceClip(c.copy(
+                    width = if (sized) c.width else w, height = if (sized) c.height else h,
+                    duration = if (c.duration > 0) c.duration else num(android.media.MediaMetadataRetriever.METADATA_KEY_DURATION) / 1000.0,
+                    hasAudio = r.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_HAS_AUDIO) == "yes",
+                ))
+            } finally { r.release() }
+        }.onFailure { AppLog.w("Could not read size and length of $id: ${it.message}") }
     }
 
     // ---- thumbnails stored on the phone (so the library works offline) ---------------
@@ -977,7 +1014,12 @@ class Library(private val ctx: Context) {
      * Lists every file in the "imported" subfolder that the library doesn't know yet (after an
      * import, or files you put there yourself). Returns how many were added.
      */
-    fun adoptImported(progress: (String) -> Unit = {}): Int {
+    fun adoptImported(progress: (String) -> Unit = {}): Int = synchronized(importLock) { adoptNewFiles(progress) }
+
+    /** Held while files in "imported" are listed or added, so a file is never listed twice. */
+    private val importLock = Any()
+
+    private fun adoptNewFiles(progress: (String) -> Unit): Int {
         val dir = importedDir(create = false) ?: return 0
         val tree = prefs.folderUri ?: return 0
         val known = synchronized(lock) { imports.mapNotNullTo(HashSet()) { it.copyFile } }
@@ -1024,6 +1066,54 @@ class Library(private val ctx: Context) {
         }
         AppLog.i("Added $added imported file(s) to the library")
         return added
+    }
+
+    /**
+     * Saves a picture found online (a sex.com GIF) into the "imported" subfolder as
+     * `<id>.<type>` and lists it in the library with its title and tags. [urls] are tried in
+     * order; the first that turns out to be a real picture is kept.
+     */
+    fun addOnlineImage(c: Clip, http: okhttp3.OkHttpClient, urls: List<String>) {
+        require(Clip.validId(c.id)) { "Bad clip ID" }
+        if (synchronized(lock) { imports.any { it.id == c.id } }) return
+        val dir = importedDir(create = true) ?: error("Choose a save folder first")
+        val resolver = ctx.contentResolver
+        var failure: Exception? = null
+        for (url in urls) {
+            val ext = url.substringBefore('?').substringAfterLast('.', "").lowercase().takeIf { it in Clip.IMAGE_EXT } ?: continue
+            val name = "${c.id}.$ext"
+            dir.findFile("$name.part")?.delete()
+            val part = dir.createFile("application/octet-stream", "$name.part") ?: error("Could not create file in folder")
+            try {
+                RedGifsApi.download(http, url).use { r ->
+                    if (r.header("Content-Length") == "0" || r.body?.contentType()?.type == "text") throw java.io.IOException("Not a picture")
+                    resolver.openOutputStream(part.uri, "wt")!!.use { out -> r.body!!.byteStream().copyTo(out) }
+                }
+                // Reading its size doubles as the check that it really is a picture; also makes the offline thumbnail.
+                val size = makeImageThumb(c.id, part.uri) ?: throw java.io.IOException("Not a picture")
+                synchronized(importLock) {
+                    val done = DocumentsContract.renameDocument(resolver, part.uri, name) ?: error("Could not rename the finished file")
+                    val finalName = DocumentFile.fromSingleUri(ctx, done)?.name ?: name
+                    val clip = c.copy(sd = null, width = size.first, height = size.second, hasAudio = false, duration = 0.0,
+                        created = c.created.takeIf { it > 0 } ?: (System.currentTimeMillis() / 1000),
+                        sources = c.sources.ifEmpty { setOf(OnlineSource.of(c.id).label) }, copyFile = "$IMPORT_DIR/$finalName")
+                    synchronized(lock) {
+                        imports = imports + clip
+                        store.putClips(listOf(ClipRow.of(clip, ClipRow.IMPORTED, (store.clips(ClipRow.IMPORTED).lastOrNull()?.pos ?: -1) + 1)))
+                        val all = compose()
+                        _state.update { it.copy(clips = all) }
+                    }
+                }
+                AppLog.i("Saved ${c.id} as $IMPORT_DIR/$name (${c.tags.size} tag(s))")
+                return
+            } catch (e: Exception) {
+                failure = e
+                runCatching { part.delete() }
+                dropThumbs(listOf(c.id))
+                AppLog.w("Could not save ${c.id} as .$ext: ${e.message}")
+            }
+        }
+        throw failure ?: java.io.IOException("No picture address")
     }
 
     // ---- auto-sync: watched collections ------------------------------------------------

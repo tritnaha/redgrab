@@ -12,8 +12,8 @@ android {
         applicationId = "app.redgrab"
         minSdk = 26
         targetSdk = 36
-        versionCode = 12
-        versionName = "12.0"
+        versionCode = 13
+        versionName = "13.0"
     }
 
     buildTypes {
@@ -33,6 +33,9 @@ android {
         compose = true
         buildConfig = true
     }
+
+    // Unit tests run on the computer: Android's own classes (logging) just do nothing there.
+    testOptions { unitTests.isReturnDefaultValues = true }
 }
 
 dependencies {
@@ -57,6 +60,7 @@ dependencies {
     ksp("androidx.room:room-compiler:2.8.5")
 
     implementation("androidx.media3:media3-exoplayer:1.10.1")
+    implementation("androidx.media3:media3-exoplayer-hls:1.10.1") // FikFap streams are HLS
     implementation("androidx.media3:media3-ui:1.10.1")
     implementation("androidx.media3:media3-datasource-okhttp:1.10.1")
     implementation("androidx.media3:media3-transformer:1.10.1")
@@ -68,4 +72,7 @@ dependencies {
     implementation("io.coil-kt.coil3:coil-gif:3.6.3") // animated GIF / WebP
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
+
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.json:json:20250517") // the JSON classes Android has built in
 }

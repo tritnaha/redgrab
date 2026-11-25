@@ -44,6 +44,13 @@
             android:theme="@style/Theme.RedGrab"
             android:label="@string/sign_in" />
 
+        <!-- Reddit's own sign-in page; not exported, and nothing outside the app can hand it a redirect. -->
+        <activity
+            android:name=".RedditLoginActivity"
+            android:exported="false"
+            android:theme="@style/Theme.RedGrab"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden" />
+
         <activity
             android:name=".VerifyActivity"
             android:exported="false"

@@ -32,6 +32,8 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Favorite
@@ -41,6 +43,9 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
@@ -83,27 +88,37 @@ import app.redgrab.Feed
 import app.redgrab.Format
 import app.redgrab.MainViewModel
 import app.redgrab.OnlineOrder
+import app.redgrab.OnlineSource
 import coil3.compose.AsyncImage
 
 /**
- * Online browsing: the niches you follow on RedGifs, site-wide search, a creator's clips, or
- * RedGifs' "related" list for a clip, each sortable by trending / newest / top. Nothing here is
- * saved until you save it; saved or liked clips are marked.
+ * Online browsing, one site at a time (switch in the title): RedGifs (the niches you follow,
+ * search, a creator's clips, "related"), Reddit (front page, subreddits, your saved and upvoted
+ * posts), FikFap (a hashtag or a user) and sex.com (GIF search). Nothing here is saved until
+ * you save it; saved or liked clips are marked.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun DiscoverScreen(vm: MainViewModel, onSignIn: () -> Unit) {
+fun DiscoverScreen(vm: MainViewModel, onSignIn: () -> Unit, onOpenSettings: () -> Unit) {
     val s by vm.state.collectAsStateWithLifecycle()
     val d = vm.discover
+    val source = d.feed.source
     val grid = rememberLazyStaggeredGridState()
     val keyboard = LocalSoftwareKeyboardController.current
-    var query by rememberSaveable { mutableStateOf((d.feed as? Feed.Search)?.query ?: "") }
+    var query by rememberSaveable(d.feed) { mutableStateOf(d.feed.query) }
     val byId = remember(s.clips) { s.clips.associateBy { it.id } }
-    val home = d.feed == Feed.Search("")
+    val home = d.feed == Feed.home(source)
+    // What each site needs before anything can load: RedGifs a sign-in, Reddit a client ID.
+    val ready = when (source) {
+        OnlineSource.RedGifs -> vm.signedIn
+        OnlineSource.Reddit -> vm.redditClientId.isNotBlank()
+        else -> true
+    }
 
-    LaunchedEffect(vm.signedIn, vm.sfw) {
-        if (vm.signedIn && !vm.sfw) {
-            vm.loadFollowedNiches()
+    LaunchedEffect(ready, vm.sfw, source, vm.redditUser) {
+        if (ready && !vm.sfw) {
+            if (source == OnlineSource.RedGifs) vm.loadFollowedNiches()
+            if (source == OnlineSource.Reddit) vm.loadSubreddits()
             if (d.items.isEmpty() && !d.loading && d.error == null) vm.loadMoreDiscover()
         }
     }
@@ -112,7 +127,7 @@ fun DiscoverScreen(vm: MainViewModel, onSignIn: () -> Unit) {
     LaunchedEffect(nearEnd, d.items.size) { if (nearEnd && d.items.isNotEmpty()) vm.loadMoreDiscover() }
     LaunchedEffect(d.feed, d.order) { grid.scrollToItem(0) }
 
-    BackHandler(enabled = !home) { query = ""; vm.openFeed(Feed.Search("")) }
+    BackHandler(enabled = !home) { vm.openFeed(Feed.home(source)) }
 
     val m = gridMetrics(vm.wall)
     val navPad = LocalNavPad.current
@@ -139,25 +154,49 @@ fun DiscoverScreen(vm: MainViewModel, onSignIn: () -> Unit) {
                     IconButton(onClick = { showView = true }) { Icon(Icons.Default.GridView, "View: grid or wall, preview size") }
                 },
                 navigationIcon = {
-                    if (!home) IconButton(onClick = { query = ""; vm.openFeed(Feed.Search("")) }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back to all") }
+                    if (!home) IconButton(onClick = { vm.openFeed(Feed.home(source)) }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back to all") }
                 },
                 title = {
-                    Column {
-                        Text(if (home) "Online" else d.feed.title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold,
-                            maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        Text("From RedGifs · ${d.order.label}",
-                            style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.75f),
-                            maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    // The title is the source switch: tap it to pick another site.
+                    var menu by remember { mutableStateOf(false) }
+                    Box {
+                        Row(Modifier.clip(RoundedCornerShape(8.dp)).clickable { menu = true }, verticalAlignment = Alignment.CenterVertically) {
+                            Column(Modifier.weight(1f, fill = false)) {
+                                Text(if (home) source.label else d.feed.title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold,
+                                    maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text(listOfNotNull(if (home) "Online" else source.label, d.order.label.takeIf { d.feed.orders.isNotEmpty() }).joinToString(" · "),
+                                    style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.75f),
+                                    maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            }
+                            Icon(Icons.Default.ArrowDropDown, "Choose source")
+                        }
+                        DropdownMenu(menu, { menu = false }) {
+                            OnlineSource.entries.forEach { o ->
+                                DropdownMenuItem(
+                                    text = { Text(o.label) },
+                                    onClick = { menu = false; vm.changeSource(o) },
+                                    trailingIcon = { if (o == source) Icon(Icons.Default.Check, "Selected") },
+                                )
+                            }
+                        }
                     }
                 },
             )
         },
     ) { pad ->
-        if (!vm.signedIn) {
+        if (source == OnlineSource.RedGifs && !vm.signedIn) {
             Column(Modifier.padding(pad).padding(bottom = navPad).fillMaxSize().padding(32.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
                 Text("Sign in to browse RedGifs", style = MaterialTheme.typography.titleMedium)
                 Spacer(Modifier.height(12.dp))
                 Button(onClick = onSignIn) { Text("Sign in") }
+            }
+            return@Scaffold
+        }
+        if (source == OnlineSource.Reddit && vm.redditClientId.isBlank()) {
+            Column(Modifier.padding(pad).padding(bottom = navPad).fillMaxSize().padding(32.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+                Text("Reddit needs a client ID", style = MaterialTheme.typography.titleMedium)
+                Spacer(Modifier.height(12.dp))
+                Button(onClick = onOpenSettings) { Text("Settings") }
             }
             return@Scaffold
         }
@@ -167,7 +206,7 @@ fun DiscoverScreen(vm: MainViewModel, onSignIn: () -> Unit) {
                 Icon(Icons.Default.VisibilityOff, null, Modifier.size(48.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
                 Spacer(Modifier.height(12.dp))
                 Text("Online browsing is paused in SFW mode", style = MaterialTheme.typography.titleMedium, textAlign = TextAlign.Center)
-                Text("Nothing is loaded from RedGifs while SFW mode is on. Turn it off with the eye icon on the Saved tab.",
+                Text("Nothing is loaded while SFW mode is on. Turn it off with the eye icon on the Saved tab.",
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                     textAlign = TextAlign.Center, modifier = Modifier.padding(top = 4.dp))
             }
@@ -188,6 +227,12 @@ fun DiscoverScreen(vm: MainViewModel, onSignIn: () -> Unit) {
         val streamOk = vm.previewUnsaved
         val moving = rememberActivePreviews(grid, vm.previewsActive, vm.previewCount, changeKey = s.saved.size) { id -> id in s.saved || streamOk }
         val head = Modifier.padding(horizontal = m.head)
+        // Shortcuts: on Reddit your saved and upvoted posts and the subreddits you joined; then what you opened recently.
+        val shortcuts = remember(source, d.subs, vm.recents, vm.redditUser) {
+            val mine = if (source == OnlineSource.Reddit && vm.redditUser != null) listOf(Feed.RedditSaved, Feed.RedditUpvoted) else emptyList()
+            val recent = if (source == OnlineSource.RedGifs) emptyList() else vm.recents.map { Feed.fromQuery(source, it) }
+            (mine + recent + d.subs.map { Feed.Subreddit(it) }).distinctBy { it.title.lowercase() }.filter { !it.needsQuery }
+        }
         LazyVerticalStaggeredGrid(
             state = grid,
             columns = StaggeredGridCells.Fixed(vm.columns),
@@ -197,10 +242,26 @@ fun DiscoverScreen(vm: MainViewModel, onSignIn: () -> Unit) {
             modifier = Modifier.padding(pad).fillMaxSize().then(pinchColumns { vm.changeColumns(vm.columns + it) }),
         ) {
             item(span = StaggeredGridItemSpan.FullLine) {
-                BarSearchField(query, { query = it }, "Search RedGifs (tags, words)…", modifier = head, leadingIcon = true,
-                    onSearch = { keyboard?.hide(); vm.openFeed(Feed.Search(query.trim())) })
+                val hint = when (source) {
+                    OnlineSource.RedGifs -> "Search RedGifs (tags, words)…"
+                    OnlineSource.Reddit -> "Subreddit, or u/name"
+                    OnlineSource.FikFap -> "Hashtag, or @user"
+                    OnlineSource.SexCom -> "Search GIFs"
+                }
+                BarSearchField(query, { query = it }, hint, modifier = head, leadingIcon = true,
+                    onSearch = { keyboard?.hide(); vm.openFeed(Feed.fromQuery(source, query)) })
             }
-            if (d.niches.isNotEmpty()) {
+            if (shortcuts.isNotEmpty()) {
+                item(span = StaggeredGridItemSpan.FullLine) {
+                    CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides 40.dp) {
+                        LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp), contentPadding = PaddingValues(horizontal = m.head)) {
+                            items(shortcuts, key = { it.title }) { f -> FilterChip(d.feed == f, { vm.openFeed(f) }, { Text(f.title, maxLines = 1) }) }
+                        }
+                    }
+                }
+            }
+            // Niches are a RedGifs thing.
+            if (source == OnlineSource.RedGifs && d.niches.isNotEmpty()) {
                 item(span = StaggeredGridItemSpan.FullLine) {
                     Column {
                         Text("Niches you follow", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary,
@@ -224,19 +285,17 @@ fun DiscoverScreen(vm: MainViewModel, onSignIn: () -> Unit) {
                         }
                     }
                 }
-            } else if (d.nichesLoaded && home) {
+            } else if (source == OnlineSource.RedGifs && d.nichesLoaded && home) {
                 item(span = StaggeredGridItemSpan.FullLine) {
                     Text("Niches you follow on RedGifs show up here. Follow some on RedGifs, or search above.",
                         style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = head)
                 }
             }
-            if (d.feed !is Feed.Related) {
+            if (d.feed.orders.isNotEmpty()) {
                 item(span = StaggeredGridItemSpan.FullLine) {
                     CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides 40.dp) {
                         Row(Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = m.head), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            // Creator feeds only sort by newest or top.
-                            val orders = if (d.feed is Feed.Performer) listOf(OnlineOrder.New, OnlineOrder.TopAll) else OnlineOrder.entries
-                            orders.forEach { o -> FilterChip(d.order == o, { vm.changeDiscoverOrder(o) }, { Text(o.label) }) }
+                            d.feed.orders.forEach { o -> FilterChip(d.order == o, { vm.changeDiscoverOrder(o) }, { Text(o.label) }) }
                         }
                     }
                 }
@@ -257,8 +316,12 @@ fun DiscoverScreen(vm: MainViewModel, onSignIn: () -> Unit) {
                             Spacer(Modifier.height(8.dp))
                             Button(onClick = { vm.loadMoreDiscover() }) { Text("Try again") }
                         }
+                        d.feed.needsQuery -> Text(if (source == OnlineSource.FikFap) "Enter a hashtag or @user." else "Enter a search.",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        // More to come: normally loaded by scrolling; the button is for pages that added nothing to scroll to.
+                        d.hasMore -> { if (d.page > 0) TextButton(onClick = { vm.loadMoreDiscover() }) { Text("Load more") } }
                         d.items.isEmpty() -> Text("Nothing found.", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        !d.hasMore -> Text("That's everything.", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
+                        else -> Text("That's everything.", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
                     }
                 }
             }
@@ -266,7 +329,7 @@ fun DiscoverScreen(vm: MainViewModel, onSignIn: () -> Unit) {
     }
 }
 
-/** Small "ONLINE" label used wherever content comes from RedGifs rather than the phone. */
+/** Small "ONLINE" label used wherever content comes from a site rather than the phone. */
 @Composable
 fun OnlinePill(modifier: Modifier = Modifier) {
     Row(
@@ -292,7 +355,9 @@ private fun OnlineTile(c: Clip, wall: Boolean, corner: Dp, compact: Boolean, lik
         if (!wall && !compact) {
             Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(32.dp)
                 .background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.7f)))))
-            Text(Format.duration(c.duration), color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Medium,
+            // Pictures say their type; a length is shown when the site gives one.
+            Text(if (c.isImage) c.fileExt.uppercase() else if (c.duration > 0) Format.duration(c.duration) else "",
+                color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Medium,
                 modifier = Modifier.align(Alignment.BottomStart).padding(5.dp))
         }
         Box(Modifier.align(Alignment.TopCenter).fillMaxWidth().height(28.dp)

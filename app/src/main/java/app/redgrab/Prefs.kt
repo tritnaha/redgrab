@@ -4,7 +4,7 @@ import android.content.Context
 import android.net.Uri
 import androidx.core.content.edit
 
-class Prefs(context: Context) {
+class Prefs(context: Context) : RedditStore {
     private val sp = context.getSharedPreferences("redgrab", Context.MODE_PRIVATE)
 
     var token: String?
@@ -129,6 +129,50 @@ class Prefs(context: Context) {
         set(v) = sp.edit { putString("theme", v) }
 
     val signedIn: Boolean get() = token != null && userAgent != null
+
+    // ---- Reddit: the user's own client ID and the tokens from signing in ----
+
+    /** Client ID of the "installed app" the user created at reddit.com/prefs/apps. */
+    override var redditClientId: String?
+        get() = sp.getString("redditClientId", null)
+        set(v) = sp.edit { putString("redditClientId", v) }
+
+    /** Short-lived access token (the user's, or an app-only one when not signed in). */
+    override var redditAccess: String?
+        get() = sp.getString("redditAccess", null)
+        set(v) = sp.edit { putString("redditAccess", v) }
+
+    /** When [redditAccess] stops working, epoch seconds. */
+    override var redditAccessExp: Long
+        get() = sp.getLong("redditAccessExp", 0)
+        set(v) = sp.edit { putLong("redditAccessExp", v) }
+
+    /** Lasting token from signing in; null = not signed in to Reddit. */
+    override var redditRefresh: String?
+        get() = sp.getString("redditRefresh", null)
+        set(v) = sp.edit { putString("redditRefresh", v) }
+
+    override var redditUser: String?
+        get() = sp.getString("redditUser", null)
+        set(v) = sp.edit { putString("redditUser", v) }
+
+    fun redditSignOut() = sp.edit { remove("redditAccess"); remove("redditAccessExp"); remove("redditRefresh"); remove("redditUser") }
+
+    // ---- Online tab ----
+
+    /** The source last shown on the Online tab ([OnlineSource] name). */
+    var onlineSource: String?
+        get() = sp.getString("onlineSource", null)
+        set(v) = sp.edit { putString("onlineSource", v) }
+
+    /** What was last opened on a source (subreddits, hashtags, searches), newest first. */
+    fun recent(source: String): List<String> = sp.getString("recent.$source", "")!!.split('\n').filter { it.isNotBlank() }
+
+    fun addRecent(source: String, query: String) {
+        val q = query.trim().replace('\n', ' ')
+        if (q.isEmpty()) return
+        sp.edit { putString("recent.$source", (listOf(q) + recent(source).filter { !it.equals(q, ignoreCase = true) }).take(12).joinToString("\n")) }
+    }
 
     fun signOut() = sp.edit { remove("token"); remove("tokenExp") }
 

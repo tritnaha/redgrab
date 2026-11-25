@@ -128,13 +128,14 @@ class DownloadWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(c
                 e is java.net.SocketTimeoutException || e is javax.net.ssl.SSLException ||
                 (e is java.io.IOException && e.message?.contains("unexpected end of stream", true) == true)
 
-        /** Plain-language reason shown next to a failed clip. */
-        fun reasonFor(e: Throwable): String = when {
-            e is HttpException && e.code == 404 -> "Not found on RedGifs (it may have been removed)"
-            e is HttpException && e.code == 410 -> "Removed from RedGifs"
-            e is HttpException && e.code == 403 -> "RedGifs refused the download (HTTP 403)"
-            e is HttpException && e.code == 429 -> "RedGifs is rate limiting; try later"
-            e is HttpException -> "RedGifs error (HTTP ${e.code})"
+        /** Plain-language reason shown next to a failed clip. [site]: where the clip is from. */
+        fun reasonFor(e: Throwable, site: String = "RedGifs"): String = when {
+            e is HttpException && e.code == 404 -> "Not found on $site (it may have been removed)"
+            e is HttpException && e.code == 410 -> "Removed from $site"
+            e is HttpException && e.code == 403 -> "$site refused the download (HTTP 403)"
+            e is HttpException && e.code == 429 -> "$site is rate limiting; try later"
+            e is HttpException -> "$site error (HTTP ${e.code})"
+            e is HlsSaver.Unsupported -> e.message ?: "The stream can't be saved"
             e is javax.net.ssl.SSLHandshakeException || e is javax.net.ssl.SSLPeerUnverifiedException ->
                 "Secure connection refused (this network may be blocking or inspecting it)"
             isNetworkError(e) -> "Connection lost"
@@ -173,21 +174,28 @@ class DownloadWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(c
         val prefs = lib.prefs
         val folder = lib.folder()
         val token = prefs.token
-        val ua = prefs.userAgent
-        if (folder == null || token == null || ua == null) {
+        val ua = applicationContext.userAgent
+        // The RedGifs sign-in is only needed for RedGifs clips; other sites' clips download without it.
+        val (queuedRedGifs, queuedOther) = lib.readQueue().partition { OnlineSource.of(it.substringBefore(' ')) == OnlineSource.RedGifs }
+        val api = if (token != null && prefs.userAgent != null) RedGifsApi(token, ua) else null
+        if (folder == null || (api == null && queuedOther.isEmpty())) {
             val why = if (folder == null) "Save folder is missing or not writable. Choose it again in Settings." else "Not signed in."
             AppLog.e("Download not started: $why")
             lib.updateDownload { DownloadProgress(message = why) }
             return@withContext Result.failure()
         }
-        val api = RedGifsApi(token, ua)
+        if (api == null && queuedRedGifs.isNotEmpty()) AppLog.w("Not signed in to RedGifs: its clips in this run are skipped")
+        // Leftovers of a stream download that was cut off (only one run works at a time).
+        java.io.File(applicationContext.cacheDir, "hls").deleteRecursively()
+        val http = api?.http ?: RedGifsApi.clientFor(ua)
         val byId = lib.state.value.clips.associateBy { it.id }
         // HD by default; SD only when HD doesn't exist or the queue entry asks for SD.
         val preferred = Quality.HD
         // Resolve each queue entry to (clip, quality), skipping qualities that are already saved.
         val todo = lib.readQueue().mapNotNull { line ->
             val parts = line.split(" ")
-            val clip = byId[parts[0]]?.takeIf { !it.isCopy } ?: return@mapNotNull null
+            val clip = byId[parts[0]]?.takeIf { !it.isCopy && !it.imported && !it.isImage } ?: return@mapNotNull null
+            if (api == null && OnlineSource.of(clip.id) == OnlineSource.RedGifs) return@mapNotNull null
             val asked = parts.getOrNull(1)?.let { runCatching { Quality.valueOf(it) }.getOrNull() }
             val have = lib.state.value.qualities[clip.id] ?: emptySet()
             if (asked == null && have.isNotEmpty()) return@mapNotNull null // already saved in some quality
@@ -220,7 +228,7 @@ class DownloadWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(c
                 progress = progress.copy(currentId = clip.id, message = "Saving clip ${i + 1} of ${todo.size}")
                 publish(progress, force = true)
                 try {
-                    saveWithRetry(api, folder, clip, quality) { n ->
+                    saveWithRetry(http, api, folder, clip, quality) { n ->
                         runBytes += n
                         windowBytes += n
                         val now = SystemClock.elapsedRealtime()
@@ -255,7 +263,7 @@ class DownloadWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(c
                         break
                     }
                     AppLog.e("Failed to save ${clip.id}: ${e.message}", e.takeUnless { it is HttpException || isNetworkError(it) })
-                    lib.markFailed(clip.id, reasonFor(e))
+                    lib.markFailed(clip.id, reasonFor(e, OnlineSource.of(clip.id).label))
                     progress = progress.copy(failed = progress.failed + 1)
                 }
                 progress = progress.copy(done = i + 1)
@@ -325,15 +333,15 @@ class DownloadWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(c
      * little longer each time). Thanks to the `.part` file each retry continues where the last
      * one stopped. Sign-in problems, human checks and "not found" are not retried.
      */
-    private suspend fun saveWithRetry(api: RedGifsApi, folder: DocumentFile, clip: Clip, q: Quality, onBytes: suspend (Int) -> Unit) {
+    private suspend fun saveWithRetry(http: okhttp3.OkHttpClient, api: RedGifsApi?, folder: DocumentFile, clip: Clip, q: Quality, onBytes: suspend (Int) -> Unit) {
         var attempt = 0
         writing = "${clip.id}${q.suffix}.part"
         while (true) {
             try {
-                save(api, folder, clip, q, onBytes)
+                save(http, api, folder, clip, q, onBytes)
                 return
             } catch (e: java.io.IOException) {
-                val permanent = e is AuthException || e is VerificationRequiredException ||
+                val permanent = e is AuthException || e is VerificationRequiredException || e is HlsSaver.Unsupported ||
                     (e is HttpException && e.code in 400..499 && e.code != 408 && e.code != 429)
                 if (permanent || attempt >= 2) {
                     // Nothing was downloaded at all: don't leave an empty partial file lying around.
@@ -356,9 +364,10 @@ class DownloadWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(c
      * Downloads into `<id>-<q>.part`, resuming an earlier partial file with an HTTP Range request
      * when the server supports it, then renames it to `<id>-hd.mp4` / `<id>-sd.mp4`. Never
      * overwrites an existing file. Refreshes media URLs once on 403/404/410. A failed or stopped
-     * download keeps its `.part` file so the next run continues from there.
+     * download keeps its `.part` file so the next run continues from there. A stream (FikFap's
+     * HLS) is fetched whole and repacked as MP4 first; it can't be resumed part-way.
      */
-    private suspend fun save(api: RedGifsApi, folder: DocumentFile, clip: Clip, q: Quality, onBytes: suspend (Int) -> Unit) {
+    private suspend fun save(http: okhttp3.OkHttpClient, api: RedGifsApi?, folder: DocumentFile, clip: Clip, q: Quality, onBytes: suspend (Int) -> Unit) {
         val target = q.fileName(clip.id)
         val partName = "${clip.id}${q.suffix}.part"
         val resolver = applicationContext.contentResolver
@@ -373,9 +382,32 @@ class DownloadWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(c
         lib.setPartial(clip.id, true)
         var have = if (existingUri != null) DocumentFile.fromSingleUri(applicationContext, partUri)?.length() ?: 0L else 0L
 
-        fun open(url: String) = api.download(url, have)
-        val response = try {
-            open(clip.url(q) ?: error("No ${q.label} video URL"))
+        /** A fresh copy of the clip from its own site (new media addresses), where the site offers that. */
+        suspend fun fresh(): Clip? = when (OnlineSource.of(clip.id)) {
+            OnlineSource.RedGifs -> api?.clip(clip.id)
+            OnlineSource.FikFap -> FikFapApi(http).post(clip.id.removePrefix(OnlineSource.FikFap.prefix))
+            else -> null
+        }?.also { lib.replaceClip(it) }
+
+        val firstUrl = clip.url(q) ?: error("No ${q.label} video URL")
+        if (HlsSaver.isHls(firstUrl)) {
+            val work = java.io.File(applicationContext.cacheDir, "hls")
+            val name = clip.id + q.suffix
+            val mp4 = try {
+                HlsSaver.save(http, firstUrl, work, name, onBytes)
+            } catch (e: HttpException) {
+                if (e.code !in setOf(401, 403, 404, 410)) throw e
+                AppLog.w("Stream address for ${clip.id} expired (HTTP ${e.code}); fetching a fresh one")
+                HlsSaver.save(http, fresh()?.url(q) ?: throw e, work, name, onBytes)
+            }
+            try {
+                resolver.openOutputStream(partUri, "wt")!!.use { out -> mp4.inputStream().use { it.copyTo(out, 256 * 1024) } }
+            } finally { mp4.delete() }
+            have = 0
+        }
+        fun open(url: String) = RedGifsApi.download(http, url, have)
+        val response = if (HlsSaver.isHls(firstUrl)) null else try {
+            open(firstUrl)
         } catch (e: HttpException) {
             when {
                 // "Range not satisfiable": only trust the partial file if it's exactly the real size.
@@ -383,13 +415,11 @@ class DownloadWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(c
                 e.code == 416 && have > 0 -> {
                     AppLog.w("Partial file for ${clip.id} doesn't match the real size (${have} vs ${e.rangeTotal}); starting over")
                     have = 0
-                    open(clip.url(q) ?: error("No ${q.label} video URL"))
+                    open(firstUrl)
                 }
                 e.code in setOf(403, 404, 410) -> {
                     AppLog.w("Media URL for ${clip.id} expired (HTTP ${e.code}); fetching a fresh one")
-                    val fresh = api.clip(clip.id) ?: throw e
-                    lib.replaceClip(fresh)
-                    open(fresh.url(q) ?: error("No ${q.label} video URL"))
+                    open(fresh()?.url(q) ?: throw e)
                 }
                 else -> throw e
             }
@@ -455,6 +485,8 @@ class DownloadWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(c
         }.onFailure { AppLog.w("Could not checksum $target: ${it.message}") }
         // A thumbnail kept on the phone, so the library looks right with no connection.
         lib.makeThumb(clip.id, saved)
+        // Size and length, for sites that don't say (FikFap, Reddit GIFs).
+        if (clip.width == 0 || clip.duration == 0.0) lib.learnFromFile(clip.id, saved)
     }
 
     private fun online(): Boolean {

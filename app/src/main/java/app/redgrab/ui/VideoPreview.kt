@@ -76,7 +76,10 @@ fun VideoPreview(vm: MainViewModel, clip: Clip, allowStream: Boolean, modifier: 
     if (clip.isImage) {
         // GIF/WebP: the image loader animates it; no video decoder needed.
         var uri by remember(clip.id) { mutableStateOf<Uri?>(null) }
-        LaunchedEffect(clip.id) { uri = withContext(Dispatchers.IO) { vm.library.localFile(clip)?.first } }
+        // From the phone when it's saved; an online GIF only if unsaved clips may animate.
+        LaunchedEffect(clip.id, clip.copyFile, allowStream) {
+            uri = withContext(Dispatchers.IO) { vm.library.localFile(clip)?.first } ?: clip.hd?.takeIf { allowStream && clip.copyFile == null }?.let(Uri::parse)
+        }
         uri?.let { coil3.compose.AsyncImage(it, null, contentScale = androidx.compose.ui.layout.ContentScale.Crop, modifier = modifier) }
         return
     }

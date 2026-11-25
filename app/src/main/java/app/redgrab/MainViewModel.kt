@@ -30,8 +30,8 @@ enum class Origin(val label: String) {
         Liked -> c.liked
         Collections -> c.colIds.isNotEmpty()
         Synced -> (Library.WATCH_LIKES in s.watched && c.liked) || c.colIds.any { it in s.watched }
-        Imported -> c.imported
-        Online -> "Discover" in c.sources
+        Imported -> "Imported" in c.sources
+        Online -> c.sources.any { it in OnlineSource.SAVED_LABELS }
     }
 }
 
@@ -115,13 +115,118 @@ data class PlayerSession(val ids: List<String>, val index: Int,
                          /** Clips from online browsing that aren't in the library, by ID. */
                          val online: Map<String, Clip> = emptyMap())
 
-/** What the Discover tab is showing. */
+/** What the Online tab is showing: one feed of one source. */
 sealed interface Feed {
     val title: String
-    data class Search(val query: String) : Feed { override val title get() = if (query.isBlank()) "All of RedGifs" else "Search: $query" }
-    data class Niche(val id: String, val name: String) : Feed { override val title get() = name }
-    data class Performer(val name: String) : Feed { override val title get() = name }
-    data class Related(val clipId: String, val label: String) : Feed { override val title get() = "Related to $label" }
+    val source: OnlineSource
+    /** What the search box holds for this feed; also what's remembered as "recent". */
+    val query: String get() = ""
+    /** Nothing to load until something is typed (FikFap and sex.com have no general feed). */
+    val needsQuery: Boolean get() = false
+    /** Sort orders the feed offers; empty = it has just one order. */
+    val orders: List<OnlineOrder> get() = emptyList()
+
+    // RedGifs
+    data class Search(override val query: String) : Feed {
+        override val title get() = if (query.isBlank()) "All of RedGifs" else "Search: $query"
+        override val source get() = OnlineSource.RedGifs
+        override val orders get() = OnlineOrder.entries
+    }
+    data class Niche(val id: String, val name: String) : Feed {
+        override val title get() = name
+        override val source get() = OnlineSource.RedGifs
+        override val orders get() = OnlineOrder.entries
+    }
+    data class Performer(val name: String) : Feed {
+        override val title get() = name
+        override val source get() = OnlineSource.RedGifs
+        // Creator feeds only sort by newest or top.
+        override val orders get() = listOf(OnlineOrder.New, OnlineOrder.TopAll)
+    }
+    data class Related(val clipId: String, val label: String) : Feed {
+        override val title get() = "Related to $label"
+        override val source get() = OnlineSource.RedGifs
+    }
+
+    // Reddit
+    data object RedditHome : Feed {
+        override val title get() = "Front page"
+        override val source get() = OnlineSource.Reddit
+        override val orders get() = OnlineOrder.entries
+    }
+    data class Subreddit(val name: String) : Feed {
+        override val title get() = "r/$name"
+        override val source get() = OnlineSource.Reddit
+        override val query get() = name
+        override val orders get() = OnlineOrder.entries
+    }
+    data class RedditUser(val name: String) : Feed {
+        override val title get() = "u/$name"
+        override val source get() = OnlineSource.Reddit
+        override val query get() = "u/$name"
+        override val orders get() = OnlineOrder.entries
+    }
+    data object RedditSaved : Feed {
+        override val title get() = "Saved"
+        override val source get() = OnlineSource.Reddit
+    }
+    data object RedditUpvoted : Feed {
+        override val title get() = "Upvoted"
+        override val source get() = OnlineSource.Reddit
+    }
+
+    // FikFap
+    data class FikFapTag(val tag: String) : Feed {
+        override val title get() = "#$tag"
+        override val source get() = OnlineSource.FikFap
+        override val query get() = tag
+        override val needsQuery get() = tag.isBlank()
+    }
+    data class FikFapUser(val name: String) : Feed {
+        override val title get() = "@$name"
+        override val source get() = OnlineSource.FikFap
+        override val query get() = "@$name"
+    }
+
+    // sex.com (GIF search; an empty search isn't accepted)
+    data class SexSearch(override val query: String) : Feed {
+        override val title get() = query
+        override val source get() = OnlineSource.SexCom
+        override val needsQuery get() = query.isBlank()
+    }
+
+    companion object {
+        /** What a source shows first. */
+        fun home(s: OnlineSource): Feed = when (s) {
+            OnlineSource.RedGifs -> Search("")
+            OnlineSource.Reddit -> RedditHome
+            OnlineSource.FikFap -> FikFapTag("")
+            OnlineSource.SexCom -> SexSearch("")
+        }
+
+        private val REDDIT_NAME = Regex("[^A-Za-z0-9_+-]")
+
+        /** The feed for what was typed in the search box (or tapped in "recent"). */
+        fun fromQuery(s: OnlineSource, text: String): Feed {
+            val t = text.trim()
+            return when (s) {
+                OnlineSource.RedGifs -> Search(t)
+                OnlineSource.Reddit -> {
+                    val path = t.removePrefix("/")
+                    val user = path.startsWith("u/", ignoreCase = true) || path.startsWith("user/", ignoreCase = true)
+                    val name = path.substringAfter('/', path).replace(REDDIT_NAME, "")
+                    when {
+                        name.isEmpty() -> RedditHome
+                        user -> RedditUser(name)
+                        else -> Subreddit(name)
+                    }
+                }
+                OnlineSource.FikFap -> if (t.startsWith("@")) t.drop(1).trim().let { if (it.isEmpty()) FikFapTag("") else FikFapUser(it) }
+                    else FikFapTag(t.trimStart('#').trim())
+                OnlineSource.SexCom -> SexSearch(t)
+            }
+        }
+    }
 }
 
 data class DiscoverState(
@@ -129,11 +234,16 @@ data class DiscoverState(
     val order: OnlineOrder = OnlineOrder.Trending,
     val items: List<Clip> = emptyList(),
     val page: Int = 0,
+    /** Where the next page starts, for feeds that continue from a marker instead of a page number. */
+    val cursor: String? = null,
     val hasMore: Boolean = true,
     val loading: Boolean = false,
     val error: String? = null,
     val niches: List<NicheInfo> = emptyList(),
     val nichesLoaded: Boolean = false,
+    /** Subreddits the Reddit account has joined. */
+    val subs: List<String> = emptyList(),
+    val subsLoaded: Boolean = false,
 )
 
 class MainViewModel(app: Application) : AndroidViewModel(app) {
@@ -155,7 +265,19 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     var importStatus by mutableStateOf<String?>(null)
         private set
     var adv by mutableStateOf(AdvFilters())
-    var discover by mutableStateOf(DiscoverState())
+    var discover by mutableStateOf(DiscoverState(feed = Feed.home(
+        OnlineSource.entries.firstOrNull { it.name == prefs.onlineSource } ?: OnlineSource.RedGifs)))
+        private set
+    /** Recently opened subreddits / hashtags / searches of the source on screen. */
+    var recents by mutableStateOf(prefs.recent(discover.feed.source.name))
+        private set
+    var redditClientId by mutableStateOf(prefs.redditClientId ?: "")
+        private set
+    /** Reddit account name when signed in to Reddit, else null. */
+    var redditUser by mutableStateOf(if (prefs.redditRefresh != null) prefs.redditUser ?: "" else null)
+        private set
+    /** Online pictures being saved right now, by clip ID. */
+    var savingImages by mutableStateOf<Set<String>>(emptySet())
         private set
     /** Bumped to ask the UI to switch to the Discover tab (e.g. after tapping Related). */
     var discoverRequests by mutableStateOf(0)
@@ -301,6 +423,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         sessionText = Session.describe(prefs)
         if (sessionState == Session.State.Expired) needsSignIn = true
         verifyNeeded = prefs.pendingVerification != null
+        redditUser = if (prefs.redditRefresh != null) prefs.redditUser ?: "" else null
     }
 
     // ---- sync -----------------------------------------------------------------
@@ -554,7 +677,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         when {
             ids.isEmpty() -> say("Nothing new to download.")
             !hasFolder || library.folder() == null -> say("Choose a save folder first (Settings → Save folder).")
-            !prefs.signedIn -> say("Sign in first.")
+            // Only RedGifs clips need the RedGifs sign-in.
+            !prefs.signedIn && ids.any { OnlineSource.of(it.substringBefore(' ')) == OnlineSource.RedGifs } -> say("Sign in first.")
             !DownloadWorker.start(getApplication(), ids) -> say("A download is already running. It will finish first.")
             else -> {}
         }
@@ -580,27 +704,129 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         player = PlayerSession(list.map { it.id }, index.coerceIn(0, list.lastIndex), list.filter { it.id !in known }.associateBy { it.id })
     }
 
-    /** Adds an online clip to the library and saves it (HD first). */
+    /** Adds an online clip to the library and saves it (HD first). Pictures go straight into the save folder. */
     fun saveOnline(clip: Clip, q: Quality? = null) {
+        if (clip.isImage) return saveOnlineImage(clip)
         viewModelScope.launch(Dispatchers.IO) {
-            library.addExtra(clip)
-            withContext(Dispatchers.Main) { if (q == null) download(clip.id) else downloadQuality(clip.id, q) }
+            // A RedGifs clip found on Reddit has no video addresses until RedGifs is asked for them.
+            val c = if (clip.hd == null && clip.sd == null) resolveOnline(clip) ?: return@launch say("Couldn't get this clip from RedGifs.") else clip
+            library.addExtra(c)
+            withContext(Dispatchers.Main) { if (q == null) download(c.id) else downloadQuality(c.id, q) }
         }
+    }
+
+    private fun saveOnlineImage(clip: Clip) {
+        if (!hasFolder || library.folder() == null) return say("Choose a save folder first (Settings → Save folder).")
+        if (clip.id in savingImages) return
+        savingImages = savingImages + clip.id
+        viewModelScope.launch(Dispatchers.IO) {
+            val r = runCatching {
+                val http = RedGifsApi.clientFor(getApplication<Application>().userAgent)
+                // sex.com lists tags only on the picture's own page.
+                val tags = clip.tags.ifEmpty {
+                    runCatching { SexComApi(http).tags(clip.id.removePrefix(OnlineSource.SexCom.prefix)) }
+                        .onFailure { AppLog.w("No tags for ${clip.id}: ${it.message}") }.getOrDefault(emptyList())
+                }
+                library.addOnlineImage(clip.copy(tags = tags), http, SexComApi.files(clip))
+            }
+            withContext(Dispatchers.Main) { savingImages = savingImages - clip.id }
+            r.onSuccess { say("Saved") }.onFailure { e ->
+                AppLog.e("Saving ${clip.id} failed: ${e.message}", e.takeUnless { it is HttpException })
+                say("Couldn't save: ${DownloadWorker.reasonFor(e, OnlineSource.of(clip.id).label)}")
+            }
+        }
+    }
+
+    /**
+     * Looks up a RedGifs clip that was found on Reddit (only its ID is known there) and puts the
+     * full clip in place of the bare one in the player and the feed. Null if RedGifs can't be asked.
+     */
+    suspend fun resolveOnline(c: Clip): Clip? = withContext(Dispatchers.IO) {
+        val token = prefs.token ?: return@withContext null
+        val ua = prefs.userAgent ?: return@withContext null
+        val fresh = runCatching { RedGifsApi(token, ua).clip(c.id) }
+            .onFailure { AppLog.w("Could not get ${c.id} from RedGifs: ${it.message}") }.getOrNull() ?: return@withContext null
+        val full = library.resolveNiches(fresh.copy(sources = c.sources, thumb = fresh.thumb ?: c.thumb,
+            description = fresh.description.ifBlank { c.description }))
+        withContext(Dispatchers.Main) { putOnline(full) }
+        full
+    }
+
+    /** A fresh copy of a clip from its own site, for when its media addresses have expired. */
+    suspend fun refreshClip(c: Clip): Clip? = withContext(Dispatchers.IO) {
+        runCatching {
+            when (OnlineSource.of(c.id)) {
+                OnlineSource.RedGifs -> RedGifsApi(prefs.token!!, prefs.userAgent!!).clip(c.id)
+                OnlineSource.FikFap -> FikFapApi(RedGifsApi.clientFor(getApplication<Application>().userAgent)).post(c.id.removePrefix(OnlineSource.FikFap.prefix))
+                else -> null
+            }
+        }.getOrNull()?.let { it.copy(sources = c.sources) }?.also { fresh ->
+            library.replaceClip(fresh)
+            withContext(Dispatchers.Main) { putOnline(fresh) }
+        }
+    }
+
+    /** Swaps in a newer copy of an online clip wherever the old one is shown. */
+    private fun putOnline(c: Clip) {
+        player?.let { p -> if (c.id in p.online) player = p.copy(online = p.online + (c.id to c)) }
+        if (discover.items.any { it.id == c.id }) discover = discover.copy(items = discover.items.map { if (it.id == c.id) c else it })
     }
 
     // ---- Discover (online browsing) ---------------------------------------------------
 
     fun openFeed(feed: Feed, order: OnlineOrder = discover.order) {
         discoverJob?.cancel()
-        discover = discover.copy(feed = feed, order = order, items = emptyList(), page = 0, hasMore = true, loading = false, error = null)
+        if (feed.source != discover.feed.source) {
+            prefs.onlineSource = feed.source.name
+            recents = prefs.recent(feed.source.name)
+        }
+        discover = discover.copy(feed = feed, order = order, items = emptyList(), page = 0, cursor = null, hasMore = true, loading = false, error = null)
         loadMoreDiscover()
     }
 
     fun changeDiscoverOrder(order: OnlineOrder) = openFeed(discover.feed, order)
 
+    /** Switches the Online tab to another site. */
+    fun changeSource(s: OnlineSource) { if (s != discover.feed.source) openFeed(Feed.home(s)) }
+
+    // ---- Reddit account ----------------------------------------------------------------
+
+    /** A new client ID means a different Reddit app: the old sign-in doesn't belong to it. */
+    fun changeRedditClientId(v: String) {
+        val id = v.trim()
+        if (id == redditClientId) return
+        prefs.redditSignOut()
+        prefs.redditClientId = id.ifEmpty { null }
+        redditClientId = id
+        redditUser = null
+        discover = discover.copy(subs = emptyList(), subsLoaded = false)
+        AppLog.i(if (id.isEmpty()) "Reddit client ID removed" else "Reddit client ID set")
+    }
+
+    fun redditSignOut() {
+        prefs.redditSignOut()
+        redditUser = null
+        discover = discover.copy(subs = emptyList(), subsLoaded = false)
+        AppLog.i("Signed out of Reddit")
+    }
+
+    /** Subreddits the Reddit account has joined, for the shortcuts row. */
+    fun loadSubreddits(force: Boolean = false) {
+        if (sfw || prefs.redditRefresh == null) return
+        if (discover.subsLoaded && !force) return
+        viewModelScope.launch {
+            val list = withContext(Dispatchers.IO) {
+                runCatching { RedditApi(prefs, RedGifsApi.clientFor(getApplication<Application>().userAgent)).mySubreddits() }
+                    .onFailure { AppLog.w("Could not read your subreddits: ${it.message}") }.getOrNull()
+            }
+            discover = discover.copy(subs = list ?: discover.subs, subsLoaded = true)
+        }
+    }
+
     /** Shows RedGifs' related clips for [clip] in Discover. */
     fun openRelated(clip: Clip) {
         val id = clip.copyOf ?: clip.id
+        if (OnlineSource.of(id) != OnlineSource.RedGifs) return
         player = null
         openFeed(Feed.Related(id, clip.user.ifBlank { "this clip" }))
         discoverRequests++
@@ -614,52 +840,77 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         discoverRequests++
     }
 
-    fun searchOnline(query: String) {
+    /** Searches [source] for [query] (on Reddit: opens that subreddit; on FikFap: that hashtag). */
+    fun searchOnline(query: String, source: OnlineSource = discover.feed.source) {
         player = null
-        openFeed(Feed.Search(query))
+        openFeed(Feed.fromQuery(source, query))
         discoverRequests++
     }
 
-    fun openPerformerOnline(name: String) {
+    /** Opens a creator's (on Reddit: a user's) clips on [source]. */
+    fun openPerformerOnline(name: String, source: OnlineSource = OnlineSource.RedGifs) {
         player = null
-        openFeed(Feed.Performer(name))
+        openFeed(when (source) {
+            OnlineSource.RedGifs -> Feed.Performer(name)
+            OnlineSource.Reddit -> Feed.fromQuery(source, "u/$name")
+            OnlineSource.FikFap -> Feed.FikFapUser(name)
+            OnlineSource.SexCom -> Feed.SexSearch(name)
+        })
         discoverRequests++
     }
 
     fun loadMoreDiscover() {
         val d = discover
-        if (sfw) return // SFW mode: nothing is fetched from RedGifs
-        if (d.loading || !d.hasMore) return
-        val token = prefs.token; val ua = prefs.userAgent
-        if (token == null || ua == null) { discover = d.copy(error = "Sign in to browse RedGifs."); return }
+        if (sfw) return // SFW mode: nothing is fetched from any site
+        if (d.loading || !d.hasMore || d.feed.needsQuery) return
+        val source = d.feed.source
+        // Each source needs its own thing first: RedGifs a sign-in, Reddit a client ID, the others nothing.
+        // The Online tab asks for it on screen; loading starts by itself once it's there.
+        if (source == OnlineSource.RedGifs && !prefs.signedIn) return
+        if (source == OnlineSource.Reddit && prefs.redditClientId.isNullOrBlank()) return
         discover = d.copy(loading = true, error = null)
         discoverJob = viewModelScope.launch {
             val next = d.page + 1
-            val result = withContext(Dispatchers.IO) {
-                runCatching {
-                    val api = RedGifsApi(token, ua)
-                    val extras = FeedExtras()
-                    val page = when (val f = d.feed) {
-                        is Feed.Search -> api.searchClips(f.query, d.order, next, extras)
-                        is Feed.Niche -> api.nicheClips(f.id, d.order, next, extras)
-                        is Feed.Performer -> api.performerClips(f.name, d.order, next, extras)
-                        is Feed.Related -> api.relatedClips(f.clipId, next, extras)
-                    }
-                    library.learn(extras)
-                    page.copy(clips = page.clips.map(library::resolveNiches))
-                }
-            }
+            val result = withContext(Dispatchers.IO) { runCatching { fetchPage(d, next) } }
             result.onSuccess { pg ->
                 val seen = discover.items.mapTo(HashSet()) { it.id }
-                discover = discover.copy(items = discover.items + pg.clips.filter { it.id !in seen }, page = next,
-                    hasMore = pg.hasMore && pg.clips.isNotEmpty(), loading = false)
+                discover = discover.copy(items = discover.items + pg.clips.filter { it.id !in seen }, page = next, cursor = pg.cursor,
+                    // A page can come back empty (no playable posts) and still have more behind it.
+                    hasMore = pg.hasMore && (pg.clips.isNotEmpty() || pg.cursor != null), loading = false)
+                if (source != OnlineSource.RedGifs && next == 1 && pg.clips.isNotEmpty() && d.feed.query.isNotBlank()) {
+                    prefs.addRecent(source.name, d.feed.query)
+                    recents = prefs.recent(source.name)
+                }
             }.onFailure { e ->
                 if (e is kotlinx.coroutines.CancellationException) return@onFailure
                 if (e is AuthException) needsSignIn = true
                 if (e is VerificationRequiredException) { prefs.pendingVerification = e.subject; verifyNeeded = true }
-                AppLog.e("Discover failed (${d.feed.title}): ${e.message}", e.takeUnless { it is AuthException || it is HttpException })
-                discover = discover.copy(loading = false, error = friendly(e).replace("Sync failed", "Couldn't load"))
+                AppLog.e("Online failed (${source.label}, ${d.feed.title}): ${e.message}",
+                    e.takeUnless { it is AuthException || it is HttpException || it is RedditAuthException })
+                discover = discover.copy(loading = false, error = friendly(e, source).replace("Sync failed", "Couldn't load"))
             }
+        }
+    }
+
+    /** Page [next] of the feed on screen, from whichever site it belongs to. */
+    private suspend fun fetchPage(d: DiscoverState, next: Int): OnlinePage {
+        suspend fun redgifs(load: suspend (RedGifsApi, FeedExtras) -> OnlinePage): OnlinePage {
+            val extras = FeedExtras()
+            val page = load(RedGifsApi(prefs.token!!, prefs.userAgent!!), extras)
+            library.learn(extras)
+            return page.copy(clips = page.clips.map(library::resolveNiches))
+        }
+        val http by lazy { RedGifsApi.clientFor(getApplication<Application>().userAgent) }
+        return when (val f = d.feed) {
+            is Feed.Search -> redgifs { api, x -> api.searchClips(f.query, d.order, next, x) }
+            is Feed.Niche -> redgifs { api, x -> api.nicheClips(f.id, d.order, next, x) }
+            is Feed.Performer -> redgifs { api, x -> api.performerClips(f.name, d.order, next, x) }
+            is Feed.Related -> redgifs { api, x -> api.relatedClips(f.clipId, next, x) }
+            is Feed.RedditHome, is Feed.Subreddit, is Feed.RedditUser, is Feed.RedditSaved, is Feed.RedditUpvoted ->
+                RedditApi(prefs, http).listing(f, d.order, d.cursor, next)
+            is Feed.FikFapTag -> FikFapApi(http).tagPosts(f.tag, d.cursor, next)
+            is Feed.FikFapUser -> FikFapApi(http).userPosts(f.name, d.cursor, next)
+            is Feed.SexSearch -> SexComApi(http).search(f.query, next)
         }
     }
 
@@ -862,12 +1113,17 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun say(msg: String) { _messages.trySend(msg) }
 
-    private fun friendly(e: Throwable): String = when (e) {
+    private fun friendly(e: Throwable, source: OnlineSource = OnlineSource.RedGifs): String = when (e) {
         is AuthException -> "Your RedGifs session expired. Tap Renew to sign in again."
         is VerificationRequiredException -> "RedGifs wants a quick human check before continuing."
+        is RedditAuthException -> e.message ?: "Reddit sign-in failed."
         is UnknownHostException -> "No internet connection."
-        is SSLException -> "Secure connection failed. A network filter may be blocking RedGifs."
-        is HttpException -> "RedGifs returned an error (HTTP ${e.code}). See Log."
+        is SSLException -> "Secure connection failed. A network filter may be blocking ${source.label}."
+        is HttpException -> when {
+            e.code == 404 && source != OnlineSource.RedGifs -> "Not found on ${source.label}."
+            e.code == 403 && source == OnlineSource.Reddit -> "Reddit won't show this (HTTP 403)."
+            else -> "${source.label} returned an error (HTTP ${e.code}). See Log."
+        }
         else -> "Sync failed: ${e.message ?: e.javaClass.simpleName}"
     }
 

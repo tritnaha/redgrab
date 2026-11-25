@@ -46,14 +46,14 @@ import kotlin.math.ceil
  * say whether it's on the phone:
  *
  *   heart     = in your likes          bookmark = only in one of your collections
- *   globe     = online only (not yours)   folder   = a file you imported
+ *   globe     = found online (any site)    folder   = a file you imported
  *   outline, white = not on the phone   filled, green = saved on the phone
  */
 @Composable
 fun SourceIcon(liked: Boolean, inCollection: Boolean, saved: Boolean, size: Dp = 20.dp, imported: Boolean = false) {
     val tint = if (saved) RgGreen else Color.White
     val (icon, what) = when {
-        imported -> androidx.compose.material.icons.Icons.Default.Folder to "Imported"
+        imported -> Icons.Default.Folder to "Imported"
         liked -> (if (saved) Icons.Default.Favorite else Icons.Default.FavoriteBorder) to "Liked"
         inCollection -> (if (saved) Icons.Default.Bookmark else Icons.Default.BookmarkBorder) to "In a collection"
         else -> Icons.Default.Public to "Online only"

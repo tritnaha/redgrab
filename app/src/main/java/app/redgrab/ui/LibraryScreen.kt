@@ -167,7 +167,7 @@ fun LibraryScreen(vm: MainViewModel, snack: SnackbarHostState, onSignIn: () -> U
     val has = remember(s.clips, s.watched, s.collections) {
         mapOf(
             Origin.Collections to s.collections.isNotEmpty(), Origin.Synced to s.watched.isNotEmpty(),
-            Origin.Imported to s.clips.any { it.imported }, Origin.Online to s.clips.any { "Discover" in it.sources },
+            Origin.Imported to s.clips.any { Origin.Imported.matches(s, it) }, Origin.Online to s.clips.any { Origin.Online.matches(s, it) },
         )
     }
     var colMenu by remember { mutableStateOf(false) }
@@ -600,7 +600,7 @@ private fun ClipTile(
                     .background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.7f))))
             )
             Row(Modifier.align(Alignment.BottomStart).padding(5.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text(if (clip.isImage) clip.copyFile!!.substringAfterLast('.').uppercase() else Format.duration(clip.duration),
+                Text(if (clip.isImage) clip.fileExt.uppercase() else Format.duration(clip.duration),
                     color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Medium)
                 if (!clip.hasAudio && !clip.isImage) {
                     Spacer(Modifier.width(4.dp))
@@ -630,7 +630,7 @@ private fun ClipTile(
                         if (Quality.SD in qualities) Icon(Icons.Outlined.Sd, "Saved in SD", tint = Color.White, modifier = Modifier.size(18.dp))
                     }
                     // One icon for source + saved state: heart/bookmark/globe, outline = not saved, green = saved.
-                    SourceIcon(liked = clip.liked, inCollection = clip.colIds.isNotEmpty(), saved = saved, size = if (compact) 14.dp else 18.dp, imported = clip.imported)
+                    SourceIcon(liked = clip.liked, inCollection = clip.colIds.isNotEmpty(), saved = saved, size = if (compact) 14.dp else 18.dp, imported = "Imported" in clip.sources)
                 }
             }
         }

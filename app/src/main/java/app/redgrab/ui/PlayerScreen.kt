@@ -106,6 +106,7 @@ import app.redgrab.Clip
 import app.redgrab.Facet
 import app.redgrab.Format
 import app.redgrab.MainViewModel
+import app.redgrab.OnlineSource
 import app.redgrab.PlayerSession
 import app.redgrab.Quality
 import app.redgrab.RedGifsApi
@@ -117,7 +118,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-/** Where a clip is played from. Saved files play offline; others stream from RedGifs. */
+/** Where a clip is played from. Saved files play offline; others stream from their site. */
 private enum class Source { Saved, Stream }
 
 @OptIn(UnstableApi::class)
@@ -182,7 +183,7 @@ fun PlayerScreen(vm: MainViewModel, session: PlayerSession) {
     }
 
     // Saved file first (HD, then SD); stream only clips that aren't on the phone.
-    LaunchedEffect(clip.id, s.qualities[clip.id]) {
+    LaunchedEffect(clip.id, s.qualities[clip.id], clip.copyFile) {
         retried = false
         position = 0; duration = 0
         val local = withContext(Dispatchers.IO) { vm.library.markSeen(listOf(clip.id)); vm.library.localFile(clip) }
@@ -190,16 +191,30 @@ fun PlayerScreen(vm: MainViewModel, session: PlayerSession) {
         imageUri = null
         if (clip.isImage) {
             exo.stop(); exo.clearMediaItems()
-            currentSource = Source.Saved
-            if (local != null) { error = null; imageUri = local.first } else error = "The file is missing from the save folder."
+            when {
+                local != null -> { currentSource = Source.Saved; error = null; imageUri = local.first }
+                // An online GIF that isn't saved yet: shown straight from its site.
+                clip.copyFile == null && clip.hd != null -> { currentSource = Source.Stream; error = null; imageUri = Uri.parse(clip.hd) }
+                else -> { currentSource = Source.Saved; error = "The file is missing from the save folder." }
+            }
             return@LaunchedEffect
         }
-        val stream = clip.url(vm.library.prefs.hd)?.let(Uri::parse)
+        var c = clip
+        if (local == null && c.hd == null && c.sd == null && !c.isCopy && !c.imported) {
+            // A RedGifs clip found on Reddit: only its ID is known until RedGifs is asked.
+            exo.stop(); exo.clearMediaItems()
+            firstFrame = false; error = null; currentSource = Source.Stream
+            c = vm.resolveOnline(c) ?: run {
+                error = if (vm.signedIn) "Couldn't get this clip from RedGifs." else "Sign in to RedGifs to play this clip."
+                return@LaunchedEffect
+            }
+        }
+        val stream = c.url(vm.library.prefs.hd)?.let(Uri::parse)
         when {
-            local != null -> load(clip, Source.Saved, local.first)
-            clip.isCopy -> error = "The edited file is missing from the save folder."
-            clip.imported -> error = "The file is missing from the save folder."
-            stream != null -> load(clip, Source.Stream, stream)
+            local != null -> load(c, Source.Saved, local.first)
+            c.isCopy -> error = "The edited file is missing from the save folder."
+            c.imported -> error = "The file is missing from the save folder."
+            stream != null -> load(c, Source.Stream, stream)
             else -> error = "No video available for this clip."
         }
     }
@@ -216,13 +231,8 @@ fun PlayerScreen(vm: MainViewModel, session: PlayerSession) {
                 if (retried || clip.imported) { error = "Can't play this clip (${e.errorCodeName}). See Log."; return }
                 retried = true
                 scope.launch {
-                    // Saved file unreadable → stream instead. Stream URL expired → fetch a fresh one.
-                    val fresh = withContext(Dispatchers.IO) {
-                        runCatching {
-                            val p = vm.library.prefs
-                            RedGifsApi(p.token!!, p.userAgent!!).clip(clip.id)?.also { vm.library.replaceClip(it) }
-                        }.getOrNull()
-                    }
+                    // Saved file unreadable → stream instead. Stream URL expired → fetch a fresh one from the clip's site.
+                    val fresh = vm.refreshClip(clip)
                     if (currentClip.id != clip.id) return@launch // you've moved on to another clip
                     val url = if (clip.isCopy) null else (fresh ?: clip).url(vm.library.prefs.hd)
                     if (url != null) load(clip, Source.Stream, Uri.parse(url))
@@ -405,7 +415,7 @@ fun PlayerScreen(vm: MainViewModel, session: PlayerSession) {
                         if (clip.user.isNotEmpty()) {
                             Row(verticalAlignment = Alignment.CenterVertically,
                                 modifier = Modifier.clickable {
-                                    if (online) vm.openPerformerOnline(clip.user) else vm.browse(Facet(Facet.Kind.Performer, clip.user))
+                                    if (online) vm.openPerformerOnline(clip.user, OnlineSource.of(clip.id)) else vm.browse(Facet(Facet.Kind.Performer, clip.user))
                                 }) {
                                 Text(clip.user, color = Color.White, fontWeight = FontWeight.SemiBold)
                             }
@@ -416,7 +426,7 @@ fun PlayerScreen(vm: MainViewModel, session: PlayerSession) {
                         }
                         Text(
                             buildString {
-                                append(if (clip.isImage) clip.copyFile!!.substringAfterLast('.').uppercase() else Format.duration(clip.duration))
+                                append(if (clip.isImage) clip.fileExt.uppercase() else Format.duration(clip.duration))
                                 if (clip.width > 0) append(if (clip.isImage) " · ${clip.width}×${clip.height}" else " · ${clip.height}p")
                                 if (!clip.hasAudio && !clip.isImage) append(" · no sound")
                                 if (clip.views > 0) append(" · %,d views".format(clip.views))
@@ -425,7 +435,7 @@ fun PlayerScreen(vm: MainViewModel, session: PlayerSession) {
                         )
                     }
                     // Same status icon as the grids: heart / bookmark / globe, green and filled once saved.
-                    if (!clip.isCopy) SourceIcon(liked = clip.liked, inCollection = clip.colIds.isNotEmpty(), saved = saved, size = 24.dp, imported = clip.imported)
+                    if (!clip.isCopy) SourceIcon(liked = clip.liked, inCollection = clip.colIds.isNotEmpty(), saved = saved, size = 24.dp, imported = "Imported" in clip.sources)
                 }
                 if (clip.tags.isNotEmpty() || clip.niches.isNotEmpty() || clip.category.isNotBlank()) {
                     Row(Modifier.padding(top = 8.dp).horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -444,7 +454,7 @@ fun PlayerScreen(vm: MainViewModel, session: PlayerSession) {
                         clip.tags.forEach { t ->
                             Text(t, color = Color.White, fontSize = 12.sp,
                                 modifier = Modifier.clip(RoundedCornerShape(50)).background(Color.White.copy(alpha = 0.15f))
-                                    .clickable { if (online) vm.searchOnline(t) else vm.browse(Facet(Facet.Kind.Tag, t)) }
+                                    .clickable { if (online) vm.searchOnline(t, OnlineSource.of(clip.id)) else vm.browse(Facet(Facet.Kind.Tag, t)) }
                                     .padding(horizontal = 10.dp, vertical = 4.dp))
                         }
                     }
@@ -474,8 +484,10 @@ fun PlayerScreen(vm: MainViewModel, session: PlayerSession) {
                     if (clip.isCopy) {
                         Text("Edited copy · ${clip.copyNote}", color = RgPurple.copy(alpha = 0.95f), fontSize = 12.sp,
                             maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-                    } else if (clip.imported) {
-                        Text("Imported · ${clip.copyFile!!.substringAfterLast('/')}", color = Color.White.copy(alpha = 0.7f), fontSize = 12.sp,
+                    } else if (clip.imported || clip.isImage) {
+                        // Where it's from ("Imported", or the site a picture was saved from), then the file once it's on the phone.
+                        Text(listOfNotNull(clip.sources.firstOrNull() ?: "Imported", clip.copyFile?.substringAfterLast('/')).joinToString(" · "),
+                            color = Color.White.copy(alpha = 0.7f), fontSize = 12.sp,
                             maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
                     } else {
                         for (q in listOf(Quality.HD, Quality.SD)) {
@@ -488,7 +500,7 @@ fun PlayerScreen(vm: MainViewModel, session: PlayerSession) {
                         Spacer(Modifier.weight(1f))
                         Text(
                             when {
-                                currentSource == Source.Stream -> "Streaming from RedGifs"
+                                currentSource == Source.Stream -> "Streaming from ${OnlineSource.of(clip.id).label}"
                                 playingQuality == Quality.LEGACY -> "Playing saved file"
                                 playingQuality != null -> "Playing saved ${playingQuality!!.label}"
                                 else -> ""
@@ -501,8 +513,12 @@ fun PlayerScreen(vm: MainViewModel, session: PlayerSession) {
                     PillButton(Icons.AutoMirrored.Filled.Send, if (vm.sharing) "Preparing…" else "WhatsApp", RgGreen.copy(alpha = 0.9f)) {
                         vm.shareToWhatsApp(clip)
                     }
-                    if (clip.isImage) Unit // pictures can't be trimmed
-                    else if (saved) PillButton(Icons.Default.ContentCut, "Edit", Color.White.copy(alpha = 0.15f)) { vm.openEditor(clip) }
+                    if (clip.isImage) {
+                        // Pictures can't be trimmed; one from online can be saved.
+                        if (!saved) PillButton(Icons.Default.Download, if (clip.id in vm.savingImages) "Saving…" else "Save", Color.White.copy(alpha = 0.15f)) {
+                            vm.saveOnline(clip)
+                        }
+                    } else if (saved) PillButton(Icons.Default.ContentCut, "Edit", Color.White.copy(alpha = 0.15f)) { vm.openEditor(clip) }
                     else PillButton(Icons.Default.Download, "Save", Color.White.copy(alpha = 0.15f)) {
                         if (online) vm.saveOnline(clip) else vm.download(clip.id)
                     }
@@ -511,7 +527,7 @@ fun PlayerScreen(vm: MainViewModel, session: PlayerSession) {
                         IconButton(onClick = { confirmDelete = true }) { Icon(Icons.Default.DeleteOutline, "Delete edited copy", tint = Color.White) }
                     } else {
                         // Related: RedGifs' own "more like this" list for the clip, shown in Discover.
-                        if (!clip.imported) IconButton(onClick = { vm.openRelated(clip) }, modifier = Modifier.size(42.dp)) {
+                        if (!clip.imported && !clip.isImage && OnlineSource.of(clip.id) == OnlineSource.RedGifs) IconButton(onClick = { vm.openRelated(clip) }, modifier = Modifier.size(42.dp)) {
                             Icon(Icons.Default.DynamicFeed, "Related clips", tint = Color.White)
                         }
                         if (!online) IconButton(onClick = { vm.editInfo(listOf(clip.id)) }, modifier = Modifier.size(42.dp)) {

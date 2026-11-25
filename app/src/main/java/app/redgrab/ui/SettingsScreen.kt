@@ -71,6 +71,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.redgrab.BuildConfig
 import app.redgrab.Format
 import app.redgrab.MainViewModel
+import app.redgrab.RedditLoginActivity
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -84,6 +85,8 @@ fun SettingsScreen(vm: MainViewModel, onSignIn: () -> Unit, onOpenLog: () -> Uni
     val pickImport = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         if (uri != null) vm.importFolder(uri)
     }
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    val redditSignIn = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { vm.onResume() }
 
     Scaffold(containerColor = MaterialTheme.colorScheme.background, topBar = { TopAppBar(title = { Text("Settings") }, expandedHeight = TopBarHeight) }) { pad ->
         Column(
@@ -97,6 +100,25 @@ fun SettingsScreen(vm: MainViewModel, onSignIn: () -> Unit, onOpenLog: () -> Uni
                 Row(Modifier.padding(start = 16.dp, end = 16.dp, bottom = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(onClick = onSignIn) { Text(if (vm.signedIn) "Renew session" else "Sign in") }
                     if (vm.signedIn) OutlinedButton(onClick = vm::signOut) { Text("Sign out") }
+                }
+            }
+
+            Section("Reddit") {
+                // The ID of the "installed app" you create at reddit.com/prefs/apps; FikFap and sex.com need nothing.
+                var id by remember(vm.redditClientId) { mutableStateOf(vm.redditClientId) }
+                OutlinedTextField(id, { id = it.trim() }, singleLine = true, label = { Text("Client ID") },
+                    supportingText = { Text("reddit.com/prefs/apps → installed app, redirect URI redgrab://reddit") },
+                    modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 12.dp))
+                Row(Modifier.padding(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                    when {
+                        id != vm.redditClientId -> Button(onClick = { vm.changeRedditClientId(id) }) { Text("Save") }
+                        vm.redditUser != null -> OutlinedButton(onClick = vm::redditSignOut) { Text("Sign out") }
+                        else -> Button(enabled = id.isNotBlank(),
+                            onClick = { redditSignIn.launch(android.content.Intent(ctx, RedditLoginActivity::class.java)) }) { Text("Sign in") }
+                    }
+                    Text(when (val u = vm.redditUser) { null -> "Not signed in"; "" -> "Signed in"; else -> "u/$u" },
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
 
