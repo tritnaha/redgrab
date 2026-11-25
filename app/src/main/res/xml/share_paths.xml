@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- Temporary copies of clips that aren't saved yet, for sharing to WhatsApp. -->
+    <cache-path name="share" path="share/" />
+</paths>

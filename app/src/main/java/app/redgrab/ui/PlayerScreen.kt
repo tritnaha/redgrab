@@ -1,0 +1,566 @@
+package app.redgrab.ui
+
+import android.app.Activity
+import android.net.Uri
+import android.webkit.WebSettings
+import androidx.activity.compose.BackHandler
+import androidx.annotation.OptIn
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
+import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.automirrored.filled.VolumeOff
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ErrorOutline
+import androidx.compose.material.icons.outlined.Hd
+import androidx.compose.material.icons.outlined.Sd
+import androidx.compose.material.icons.filled.ArrowDownward
+import androidx.compose.material.icons.filled.DynamicFeed
+import androidx.compose.material.icons.filled.ContentCut
+import androidx.compose.material.icons.filled.DeleteOutline
+import androidx.compose.material.icons.filled.EditNote
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Fullscreen
+import androidx.compose.material.icons.filled.FullscreenExit
+import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.SkipNext
+import androidx.compose.material.icons.filled.SkipPrevious
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.media3.common.MediaItem
+import androidx.media3.common.PlaybackException
+import androidx.media3.common.Player
+import androidx.media3.common.util.UnstableApi
+import androidx.media3.datasource.DefaultDataSource
+import androidx.media3.datasource.okhttp.OkHttpDataSource
+import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.ui.AspectRatioFrameLayout
+import androidx.media3.ui.PlayerView
+import app.redgrab.AppLog
+import app.redgrab.Clip
+import app.redgrab.Facet
+import app.redgrab.Format
+import app.redgrab.MainViewModel
+import app.redgrab.PlayerSession
+import app.redgrab.Quality
+import app.redgrab.RedGifsApi
+import app.redgrab.RedGrabApp
+import androidx.media3.datasource.cache.CacheDataSource
+import coil3.compose.AsyncImage
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+
+/** Where a clip is played from. Saved files play offline; others stream from RedGifs. */
+private enum class Source { Saved, Stream }
+
+@OptIn(UnstableApi::class)
+@Composable
+fun PlayerScreen(vm: MainViewModel, session: PlayerSession) {
+    val ctx = LocalContext.current
+    val view = LocalView.current
+    val scope = rememberCoroutineScope()
+    val s by vm.state.collectAsStateWithLifecycle()
+    val dl by vm.download.collectAsStateWithLifecycle()
+    val byId = remember(s.clips) { s.clips.associateBy { it.id } }
+    val clipId = session.ids[session.index]
+    val clip: Clip = byId[clipId] ?: session.online[clipId] ?: run { vm.closePlayer(); return }
+    val saved = clip.id in s.saved
+    /** A clip from online browsing that isn't in the library (yet). */
+    val online = clipId !in byId
+    val currentClip by rememberUpdatedState(clip)
+
+    var fullscreen by remember { mutableStateOf(false) }
+    var playing by remember { mutableStateOf(true) }
+    var firstFrame by remember { mutableStateOf(false) }
+    var buffering by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
+    var position by remember { mutableLongStateOf(0L) }
+    var duration by remember { mutableLongStateOf(0L) }
+    var seeking by remember { mutableStateOf<Float?>(null) }
+    var flash by remember { mutableStateOf<ImageVector?>(null) }
+    var flashKey by remember { mutableLongStateOf(0L) }
+    var currentSource by remember { mutableStateOf(Source.Stream) }
+    var retried by remember { mutableStateOf(false) }
+    var confirmDelete by remember { mutableStateOf(false) }
+
+    val ua = remember { vm.library.prefs.userAgent ?: runCatching { WebSettings.getDefaultUserAgent(ctx) }.getOrDefault("Mozilla/5.0") }
+    // Saved files: read straight from the phone. Unsaved clips: stream through a local cache.
+    val localFactory = remember { DefaultMediaSourceFactory(DefaultDataSource.Factory(ctx)) }
+    val streamFactory = remember {
+        val upstream = DefaultDataSource.Factory(ctx, OkHttpDataSource.Factory(RedGifsApi.clientFor(ua)))
+        DefaultMediaSourceFactory(
+            CacheDataSource.Factory().setCache((ctx.applicationContext as RedGrabApp).mediaCache).setUpstreamDataSourceFactory(upstream)
+        )
+    }
+    val exo = remember {
+        ExoPlayer.Builder(ctx).build().apply {
+            repeatMode = Player.REPEAT_MODE_ONE
+            playWhenReady = true
+        }
+    }
+    var playingQuality by remember { mutableStateOf<Quality?>(null) }
+    /** Set when the current item is a picture file (GIF, WebP): shown with the image viewer, not the video player. */
+    var imageUri by remember { mutableStateOf<Uri?>(null) }
+
+    fun show(icon: ImageVector) { flash = icon; flashKey = System.nanoTime() }
+
+    fun load(c: Clip, source: Source, url: Uri) {
+        currentSource = source
+        firstFrame = false
+        error = null
+        val item = MediaItem.fromUri(url)
+        exo.setMediaSource((if (source == Source.Saved) localFactory else streamFactory).createMediaSource(item))
+        exo.prepare()
+        exo.playWhenReady = true
+    }
+
+    // Saved file first (HD, then SD); stream only clips that aren't on the phone.
+    LaunchedEffect(clip.id, s.qualities[clip.id]) {
+        retried = false
+        position = 0; duration = 0
+        val local = withContext(Dispatchers.IO) { vm.library.markSeen(listOf(clip.id)); vm.library.localFile(clip) }
+        playingQuality = local?.second
+        imageUri = null
+        if (clip.isImage) {
+            exo.stop(); exo.clearMediaItems()
+            currentSource = Source.Saved
+            if (local != null) { error = null; imageUri = local.first } else error = "The file is missing from the save folder."
+            return@LaunchedEffect
+        }
+        val stream = clip.url(vm.library.prefs.hd)?.let(Uri::parse)
+        when {
+            local != null -> load(clip, Source.Saved, local.first)
+            clip.isCopy -> error = "The edited file is missing from the save folder."
+            clip.imported -> error = "The file is missing from the save folder."
+            stream != null -> load(clip, Source.Stream, stream)
+            else -> error = "No video available for this clip."
+        }
+    }
+
+    // Player callbacks: play state, buffering, first frame, errors (with one automatic retry).
+    DisposableEffect(exo) {
+        val listener = object : Player.Listener {
+            override fun onIsPlayingChanged(isPlaying: Boolean) { playing = exo.playWhenReady }
+            override fun onPlaybackStateChanged(state: Int) { buffering = state == Player.STATE_BUFFERING }
+            override fun onRenderedFirstFrame() { firstFrame = true }
+            override fun onPlayerError(e: PlaybackException) {
+                val clip = currentClip
+                AppLog.w("Playback error for ${clip.id} (${currentSource}): ${e.errorCodeName}")
+                if (retried || clip.imported) { error = "Can't play this clip (${e.errorCodeName}). See Log."; return }
+                retried = true
+                scope.launch {
+                    // Saved file unreadable → stream instead. Stream URL expired → fetch a fresh one.
+                    val fresh = withContext(Dispatchers.IO) {
+                        runCatching {
+                            val p = vm.library.prefs
+                            RedGifsApi(p.token!!, p.userAgent!!).clip(clip.id)?.also { vm.library.replaceClip(it) }
+                        }.getOrNull()
+                    }
+                    if (currentClip.id != clip.id) return@launch // you've moved on to another clip
+                    val url = if (clip.isCopy) null else (fresh ?: clip).url(vm.library.prefs.hd)
+                    if (url != null) load(clip, Source.Stream, Uri.parse(url))
+                    else error = "Can't play this clip. See Log."
+                }
+            }
+        }
+        exo.addListener(listener)
+        onDispose { exo.removeListener(listener) }
+    }
+
+    // SFW mode always mutes. When sound is on, keep the phone speaker from blasting (volume guard).
+    LaunchedEffect(vm.playMuted, vm.sfw) {
+        val muted = vm.playMuted || vm.sfw
+        exo.volume = if (muted) 0f else 1f
+        if (!muted && vm.volumeGuard) {
+            app.redgrab.VolumeGuard.apply(ctx, vm.volumeLimit)?.let {
+                android.widget.Toast.makeText(ctx, it, android.widget.Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    DisposableEffect(Unit) {
+        val am = ctx.getSystemService(android.media.AudioManager::class.java)
+        val cb = object : android.media.AudioDeviceCallback() {
+            override fun onAudioDevicesRemoved(removed: Array<out android.media.AudioDeviceInfo>?) {
+                // Headphones or Bluetooth just went away: sound would now come out of the speaker.
+                if (!(vm.playMuted || vm.sfw) && vm.volumeGuard) {
+                    app.redgrab.VolumeGuard.apply(ctx, vm.volumeLimit, afterRouteChange = true)?.let {
+                        android.widget.Toast.makeText(ctx, it, android.widget.Toast.LENGTH_SHORT).show()
+                    }
+                }
+            }
+        }
+        am?.registerAudioDeviceCallback(cb, android.os.Handler(android.os.Looper.getMainLooper()))
+        onDispose { am?.unregisterAudioDeviceCallback(cb) }
+    }
+
+    // Progress ticker.
+    LaunchedEffect(exo) {
+        while (true) {
+            position = exo.currentPosition
+            duration = exo.duration.takeIf { it > 0 } ?: 0
+            delay(200)
+        }
+    }
+
+    // Pause when the app goes to the background; release when the player closes.
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    DisposableEffect(lifecycle) {
+        val obs = LifecycleEventObserver { _, ev -> if (ev == Lifecycle.Event.ON_PAUSE) exo.pause() }
+        lifecycle.addObserver(obs)
+        onDispose { lifecycle.removeObserver(obs); exo.release() }
+    }
+
+    // Immersive fullscreen: hide status and navigation bars.
+    DisposableEffect(fullscreen) {
+        val window = (view.context as? Activity)?.window
+        if (window != null) {
+            val ctl = WindowCompat.getInsetsController(window, view)
+            if (fullscreen) {
+                ctl.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+                ctl.hide(WindowInsetsCompat.Type.systemBars())
+            } else ctl.show(WindowInsetsCompat.Type.systemBars())
+        }
+        onDispose { if (window != null) WindowCompat.getInsetsController(window, view).show(WindowInsetsCompat.Type.systemBars()) }
+    }
+
+    BackHandler { if (fullscreen) fullscreen = false else vm.closePlayer() }
+
+    val hasPrev = session.index > 0
+    val hasNext = session.index < session.ids.lastIndex
+    fun prev() { if (hasPrev) { vm.movePlayer(-1); show(Icons.Default.SkipPrevious) } }
+    fun next() { if (hasNext) { vm.movePlayer(1); show(Icons.Default.SkipNext) } }
+    fun togglePlay() {
+        if (clip.isImage) { fullscreen = !fullscreen; return } // pictures loop by themselves
+        if (exo.isPlaying) { exo.pause(); playing = false; show(Icons.Default.Pause) }
+        else { exo.play(); playing = true; show(Icons.Default.PlayArrow) }
+    }
+
+    Box(Modifier.fillMaxSize().background(Color.Black)) {
+        AndroidView(
+            modifier = Modifier.fillMaxSize(),
+            factory = { c ->
+                PlayerView(c).apply {
+                    useController = false
+                    resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
+                    setShutterBackgroundColor(android.graphics.Color.TRANSPARENT)
+                    player = exo
+                }
+            },
+        )
+
+        imageUri?.let { AsyncImage(it, null, contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize().background(Color.Black)) }
+
+        // Thumbnail over the (still black) video surface until the first frame arrives.
+        if (!firstFrame && imageUri == null) {
+            AsyncImage(thumbModel(s, vm.library, clip), null, contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize().background(Color.Black))
+        }
+
+        // Gesture layer: left quarter = previous, right quarter = next, middle = play/pause; swipe to navigate.
+        Box(
+            Modifier.fillMaxSize()
+                .pointerInput(session.index, session.ids.size) {
+                    detectTapGestures { o ->
+                        val w = size.width
+                        when {
+                            o.x < w * 0.25f -> prev()
+                            o.x > w * 0.75f -> next()
+                            else -> togglePlay()
+                        }
+                    }
+                }
+                .pointerInput(session.index, session.ids.size) {
+                    var dx = 0f
+                    detectHorizontalDragGestures(
+                        onDragStart = { dx = 0f },
+                        onDragEnd = { if (dx > 120) prev() else if (dx < -120) next() },
+                    ) { _, d -> dx += d }
+                },
+        )
+
+        if (buffering && error == null) {
+            CircularProgressIndicator(Modifier.align(Alignment.Center).size(48.dp), color = Color.White, strokeWidth = 3.dp)
+        }
+        error?.let {
+            Text(it, color = Color.White, modifier = Modifier.align(Alignment.Center)
+                .background(Color.Black.copy(alpha = 0.7f), RoundedCornerShape(12.dp)).padding(16.dp))
+        }
+
+        // Brief feedback icon for taps.
+        LaunchedEffect(flashKey) { if (flash != null) { delay(550); flash = null } }
+        AnimatedVisibility(flash != null, Modifier.align(Alignment.Center), enter = fadeIn(), exit = fadeOut()) {
+            Box(Modifier.size(84.dp).background(Color.Black.copy(alpha = 0.45f), CircleShape), contentAlignment = Alignment.Center) {
+                flash?.let { Icon(it, null, tint = Color.White, modifier = Modifier.size(48.dp)) }
+            }
+        }
+        if (!playing && flash == null && error == null && !buffering) {
+            Icon(Icons.Default.PlayArrow, "Paused", tint = Color.White.copy(alpha = 0.8f),
+                modifier = Modifier.align(Alignment.Center).size(72.dp))
+        }
+
+        // A thin accent line marks anything that's streaming rather than playing from the phone.
+        if (currentSource == Source.Stream && error == null) {
+            Box(Modifier.align(Alignment.TopCenter).fillMaxWidth().height(3.dp).background(RgRed))
+        }
+
+        if (fullscreen) {
+            // Only a subtle corner control in fullscreen.
+            IconButton(onClick = { fullscreen = false }, modifier = Modifier.align(Alignment.TopEnd).padding(8.dp)) {
+                Icon(Icons.Default.FullscreenExit, "Exit fullscreen", tint = Color.White.copy(alpha = 0.6f))
+            }
+        } else {
+            // Top bar.
+            Row(
+                Modifier.align(Alignment.TopCenter).fillMaxWidth()
+                    .background(Brush.verticalGradient(listOf(Color.Black.copy(alpha = 0.7f), Color.Transparent)))
+                    .statusBarsPadding().padding(horizontal = 4.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                IconButton(onClick = vm::closePlayer) { Icon(Icons.Default.Close, "Close", tint = Color.White) }
+                Text("${session.index + 1} / ${session.ids.size}", color = Color.White, style = MaterialTheme.typography.labelLarge)
+                if (currentSource == Source.Stream && error == null) OnlinePill(Modifier.padding(start = 10.dp))
+                Spacer(Modifier.weight(1f))
+                if (!clip.isImage) IconButton(onClick = { vm.changePlayMuted(!vm.playMuted) }) {
+                    Icon(if (vm.playMuted) Icons.AutoMirrored.Filled.VolumeOff else Icons.AutoMirrored.Filled.VolumeUp,
+                        if (vm.playMuted) "Unmute" else "Mute", tint = Color.White)
+                }
+                IconButton(onClick = { fullscreen = true }) { Icon(Icons.Default.Fullscreen, "Fullscreen", tint = Color.White) }
+            }
+
+            // Bottom panel: info, tags, progress, actions.
+            Column(
+                Modifier.align(Alignment.BottomCenter).fillMaxWidth()
+                    .background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.85f))))
+                    .navigationBarsPadding().padding(horizontal = 16.dp, vertical = 8.dp),
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        if (clip.user.isNotEmpty()) {
+                            Row(verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.clickable {
+                                    if (online) vm.openPerformerOnline(clip.user) else vm.browse(Facet(Facet.Kind.Performer, clip.user))
+                                }) {
+                                Text(clip.user, color = Color.White, fontWeight = FontWeight.SemiBold)
+                            }
+                        }
+                        if (clip.description.isNotBlank()) {
+                            Text(clip.description, color = Color.White.copy(alpha = 0.85f), fontSize = 12.sp, maxLines = 2,
+                                overflow = TextOverflow.Ellipsis)
+                        }
+                        Text(
+                            buildString {
+                                append(if (clip.isImage) clip.copyFile!!.substringAfterLast('.').uppercase() else Format.duration(clip.duration))
+                                if (clip.width > 0) append(if (clip.isImage) " · ${clip.width}×${clip.height}" else " · ${clip.height}p")
+                                if (!clip.hasAudio && !clip.isImage) append(" · no sound")
+                                if (clip.views > 0) append(" · %,d views".format(clip.views))
+                            },
+                            color = Color.White.copy(alpha = 0.7f), fontSize = 12.sp,
+                        )
+                    }
+                    // Same status icon as the grids: heart / bookmark / globe, green and filled once saved.
+                    if (!clip.isCopy) SourceIcon(liked = clip.liked, inCollection = clip.colIds.isNotEmpty(), saved = saved, size = 24.dp, imported = clip.imported)
+                }
+                if (clip.tags.isNotEmpty() || clip.niches.isNotEmpty() || clip.category.isNotBlank()) {
+                    Row(Modifier.padding(top = 8.dp).horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        // Category (yours) and niches (RedGifs communities) first, then tags.
+                        if (clip.category.isNotBlank()) {
+                            Text(clip.category, color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold,
+                                modifier = Modifier.clip(RoundedCornerShape(50)).background(RgRed.copy(alpha = 0.55f))
+                                    .clickable { vm.browse(Facet(Facet.Kind.Category, clip.category)) }.padding(horizontal = 10.dp, vertical = 4.dp))
+                        }
+                        clip.niches.forEach { n ->
+                            Text("◆ $n", color = Color.White, fontSize = 12.sp,
+                                modifier = Modifier.clip(RoundedCornerShape(50)).background(RgPurple.copy(alpha = 0.45f))
+                                    .clickable { if (online) vm.openNicheOnline(n) else vm.browse(Facet(Facet.Kind.Niche, n)) }
+                                    .padding(horizontal = 10.dp, vertical = 4.dp))
+                        }
+                        clip.tags.forEach { t ->
+                            Text(t, color = Color.White, fontSize = 12.sp,
+                                modifier = Modifier.clip(RoundedCornerShape(50)).background(Color.White.copy(alpha = 0.15f))
+                                    .clickable { if (online) vm.searchOnline(t) else vm.browse(Facet(Facet.Kind.Tag, t)) }
+                                    .padding(horizontal = 10.dp, vertical = 4.dp))
+                        }
+                    }
+                }
+                val frac = if (duration > 0) (position.toFloat() / duration).coerceIn(0f, 1f) else 0f
+                if (!clip.isImage) Slider(
+                    value = seeking ?: frac,
+                    onValueChange = { seeking = it },
+                    onValueChangeFinished = { seeking?.let { exo.seekTo((it * duration).toLong()) }; seeking = null },
+                    colors = SliderDefaults.colors(thumbColor = RgRed, activeTrackColor = RgRed, inactiveTrackColor = Color.White.copy(alpha = 0.25f)),
+                    modifier = Modifier.fillMaxWidth().height(28.dp),
+                )
+                s.failures[clip.id]?.let { f ->
+                    Row(Modifier.padding(bottom = 6.dp).clip(RoundedCornerShape(10.dp)).background(Color.Black.copy(alpha = 0.5f)).padding(start = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.ErrorOutline, null, tint = RgAmber, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text("Download failed: ${f.reason}" + (if (f.attempts > 1) " (${f.attempts} tries)" else "") +
+                            (if (f.gaveUp) ". No more automatic retries." else ""),
+                            color = Color.White, fontSize = 12.sp, modifier = Modifier.weight(1f))
+                        androidx.compose.material3.TextButton(onClick = { vm.retryFailed(listOf(clip.id)) }) { Text("Retry") }
+                    }
+                }
+                // Where it's playing from and which qualities are saved (tap a missing one to save it).
+                val have = s.qualities[clip.id] ?: emptySet()
+                Row(Modifier.padding(bottom = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                    if (clip.isCopy) {
+                        Text("Edited copy · ${clip.copyNote}", color = RgPurple.copy(alpha = 0.95f), fontSize = 12.sp,
+                            maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                    } else if (clip.imported) {
+                        Text("Imported · ${clip.copyFile!!.substringAfterLast('/')}", color = Color.White.copy(alpha = 0.7f), fontSize = 12.sp,
+                            maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                    } else {
+                        for (q in listOf(Quality.HD, Quality.SD)) {
+                            val isSaved = q in have
+                            val available = clip.url(q) != null
+                            QualityChip(q, isSaved, available, downloading = dl.running && dl.currentId == clip.id) {
+                                if (!isSaved && available) { if (online) vm.saveOnline(clip, q) else vm.downloadQuality(clip.id, q) }
+                            }
+                        }
+                        Spacer(Modifier.weight(1f))
+                        Text(
+                            when {
+                                currentSource == Source.Stream -> "Streaming from RedGifs"
+                                playingQuality == Quality.LEGACY -> "Playing saved file"
+                                playingQuality != null -> "Playing saved ${playingQuality!!.label}"
+                                else -> ""
+                            },
+                            color = Color.White.copy(alpha = 0.6f), fontSize = 11.sp,
+                        )
+                    }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    PillButton(Icons.AutoMirrored.Filled.Send, if (vm.sharing) "Preparing…" else "WhatsApp", RgGreen.copy(alpha = 0.9f)) {
+                        vm.shareToWhatsApp(clip)
+                    }
+                    if (clip.isImage) Unit // pictures can't be trimmed
+                    else if (saved) PillButton(Icons.Default.ContentCut, "Edit", Color.White.copy(alpha = 0.15f)) { vm.openEditor(clip) }
+                    else PillButton(Icons.Default.Download, "Save", Color.White.copy(alpha = 0.15f)) {
+                        if (online) vm.saveOnline(clip) else vm.download(clip.id)
+                    }
+                    Spacer(Modifier.weight(1f))
+                    if (clip.isCopy) {
+                        IconButton(onClick = { confirmDelete = true }) { Icon(Icons.Default.DeleteOutline, "Delete edited copy", tint = Color.White) }
+                    } else {
+                        // Related: RedGifs' own "more like this" list for the clip, shown in Discover.
+                        if (!clip.imported) IconButton(onClick = { vm.openRelated(clip) }, modifier = Modifier.size(42.dp)) {
+                            Icon(Icons.Default.DynamicFeed, "Related clips", tint = Color.White)
+                        }
+                        if (!online) IconButton(onClick = { vm.editInfo(listOf(clip.id)) }, modifier = Modifier.size(42.dp)) {
+                            Icon(Icons.Default.EditNote, "Edit info", tint = Color.White)
+                        }
+                        if (saved) IconButton(onClick = { vm.requestDelete(listOf(clip.id)) }, modifier = Modifier.size(42.dp)) {
+                            Icon(Icons.Default.DeleteOutline, "Delete", tint = Color.White)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if (confirmDelete) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { confirmDelete = false },
+            title = { Text("Delete this edited copy?") },
+            text = { Text("${clip.copyFile} is deleted from the save folder. The original clip isn't affected.") },
+            confirmButton = { androidx.compose.material3.TextButton(onClick = { confirmDelete = false; vm.deleteCopy(clip) }) { Text("Delete") } },
+            dismissButton = { androidx.compose.material3.TextButton(onClick = { confirmDelete = false }) { Text("Cancel") } },
+        )
+    }
+}
+
+/**
+ * HD/SD indicator: the icon alone. Filled green = saved; white with a small download arrow =
+ * available, tap to save it; faded = RedGifs has no file in that quality.
+ */
+@Composable
+private fun QualityChip(q: Quality, saved: Boolean, available: Boolean, downloading: Boolean, onClick: () -> Unit) {
+    val icon = if (q == Quality.SD) Icons.Outlined.Sd else Icons.Outlined.Hd
+    val desc = when { saved -> "${q.label} saved"; available -> "Save in ${q.label}"; else -> "No ${q.label} version" }
+    // Plain icon, no background: green = saved, white with a small arrow = tap to save, faded = not offered.
+    Box(Modifier.clip(RoundedCornerShape(8.dp)).clickable(enabled = !saved && available && !downloading, onClick = onClick).padding(2.dp)) {
+        Icon(icon, desc, tint = if (saved) RgGreen else Color.White.copy(alpha = if (available) 1f else 0.35f), modifier = Modifier.size(28.dp))
+        if (!saved && available) Icon(Icons.Default.ArrowDownward, null, tint = Color.White,
+            modifier = Modifier.size(11.dp).align(Alignment.BottomEnd))
+    }
+}
+
+@Composable
+private fun PillButton(icon: ImageVector, label: String, bg: Color, onClick: () -> Unit) {
+    Row(
+        Modifier.clip(RoundedCornerShape(50)).background(bg).clickable(onClick = onClick).padding(horizontal = 14.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(icon, null, tint = Color.White, modifier = Modifier.size(18.dp))
+        Spacer(Modifier.width(6.dp))
+        Text(label, color = Color.White, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    }
+}

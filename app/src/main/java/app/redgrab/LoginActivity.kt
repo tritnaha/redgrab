@@ -1,0 +1,238 @@
+package app.redgrab
+
+import android.annotation.SuppressLint
+import android.os.Bundle
+import android.webkit.ConsoleMessage
+import android.webkit.CookieManager
+import android.webkit.WebChromeClient
+import android.webkit.WebResourceError
+import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
+import android.webkit.WebView
+import android.webkit.WebViewClient
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
+import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBar
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.viewinterop.AndroidView
+import app.redgrab.ui.RedGrabTheme
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withContext
+import org.json.JSONTokener
+import kotlin.coroutines.resume
+
+/**
+ * Shows the real redgifs.com site. You sign in yourself (username, emailed code,
+ * captcha); the app only reads the resulting session token afterwards.
+ */
+class LoginActivity : ComponentActivity() {
+
+    companion object {
+        /** Open in "renew" mode: close automatically once a fresh token shows up. */
+        const val EXTRA_RENEW = "renew"
+    }
+
+    /** Last bearer token seen on a request to api.redgifs.com. */
+    @Volatile private var seenToken: String? = null
+    private var web: WebView? = null
+
+    @OptIn(ExperimentalMaterial3Api::class)
+    override fun onCreate(savedInstanceState: Bundle?) {
+        enableEdgeToEdge()
+        super.onCreate(savedInstanceState)
+        AppLog.i("Sign-in screen opened")
+        setContent {
+            RedGrabTheme(library.prefs.theme) {
+                val snack = remember { SnackbarHostState() }
+                val scope = rememberCoroutineScope()
+                var loading by remember { mutableIntStateOf(0) }
+                var checking by remember { mutableStateOf(false) }
+                var canGoBack by remember { mutableStateOf(false) }
+
+                BackHandler(enabled = canGoBack) { web?.goBack() }
+
+                // Renew mode: if RedGifs still has you signed in, a fresh token appears by itself.
+                if (renew) LaunchedEffect(Unit) {
+                    repeat(20) {
+                        kotlinx.coroutines.delay(2500)
+                        if (tryToken(quiet = true) == null) return@LaunchedEffect
+                    }
+                    snack.showSnackbar("Couldn't renew automatically. Log in on the page, then tap Done.")
+                }
+
+                Scaffold(
+                    topBar = {
+                        TopAppBar(
+                            title = { Text("Sign in to RedGifs") },
+                            navigationIcon = {
+                                IconButton(onClick = { finish() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Close") }
+                            },
+                            actions = {
+                                Button(
+                                    enabled = !checking,
+                                    onClick = {
+                                        checking = true
+                                        scope.launch {
+                                            val msg = tryToken(quiet = false)
+                                            checking = false
+                                            if (msg != null) snack.showSnackbar(msg)
+                                        }
+                                    },
+                                    modifier = Modifier.padding(end = 8.dp),
+                                ) {
+                                    if (checking) CircularProgressIndicator(Modifier.padding(2.dp), strokeWidth = 2.dp)
+                                    else Text("Done")
+                                }
+                            },
+                        )
+                    },
+                    snackbarHost = { SnackbarHost(snack) },
+                ) { pad ->
+                    Column(Modifier.padding(pad).fillMaxSize()) {
+                        Text(
+                            "Log in below with your username and the code RedGifs emails you. " +
+                                "When you can see your account, tap Done.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                        )
+                        Box(Modifier.fillMaxSize()) {
+                            AndroidView(
+                                modifier = Modifier.fillMaxSize(),
+                                factory = { ctx ->
+                                    createWebView(ctx, onProgress = { loading = it }, onNav = { canGoBack = it })
+                                },
+                            )
+                            if (loading in 1..99) {
+                                LinearProgressIndicator(
+                                    progress = { loading / 100f },
+                                    modifier = Modifier.fillMaxWidth(),
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    @SuppressLint("SetJavaScriptEnabled")
+    private fun createWebView(ctx: android.content.Context, onProgress: (Int) -> Unit, onNav: (Boolean) -> Unit): WebView {
+        val w = WebView(ctx)
+        web = w
+        CookieManager.getInstance().setAcceptCookie(true)
+        CookieManager.getInstance().setAcceptThirdPartyCookies(w, true)
+        w.settings.javaScriptEnabled = true
+        w.settings.domStorageEnabled = true
+        w.webViewClient = object : WebViewClient() {
+            override fun shouldInterceptRequest(view: WebView, req: WebResourceRequest): WebResourceResponse? {
+                if (req.url.host == "api.redgifs.com") {
+                    req.requestHeaders.entries
+                        .firstOrNull { it.key.equals("Authorization", ignoreCase = true) }
+                        ?.value?.removePrefix("Bearer ")?.trim()
+                        ?.takeIf { it.isNotEmpty() }
+                        ?.let { seenToken = it }
+                }
+                return null
+            }
+
+            override fun doUpdateVisitedHistory(view: WebView, url: String?, isReload: Boolean) {
+                onNav(view.canGoBack())
+            }
+
+            override fun onReceivedError(view: WebView, req: WebResourceRequest, err: WebResourceError) {
+                if (req.isForMainFrame) AppLog.w("Sign-in page failed to load: ${err.errorCode} ${err.description} (${req.url.host})")
+            }
+
+            override fun onReceivedHttpError(view: WebView, req: WebResourceRequest, resp: WebResourceResponse) {
+                if (req.isForMainFrame) AppLog.w("Sign-in page HTTP ${resp.statusCode} (${req.url.host})")
+            }
+        }
+        w.webChromeClient = object : WebChromeClient() {
+            override fun onProgressChanged(view: WebView, newProgress: Int) = onProgress(newProgress)
+            override fun onConsoleMessage(m: ConsoleMessage): Boolean {
+                if (m.messageLevel() == ConsoleMessage.MessageLevel.ERROR) AppLog.w("Page error: ${m.message().take(200)}")
+                return true
+            }
+        }
+        w.loadUrl("https://www.redgifs.com/")
+        return w
+    }
+
+    private val renew by lazy { intent.getBooleanExtra(EXTRA_RENEW, false) }
+
+    /** Returns an error message to show, or null after a successful sign-in (screen closes). */
+    private suspend fun tryToken(quiet: Boolean): String? {
+        val w = web ?: return "Page not ready yet."
+        // Where the site keeps its token (from its own JS): sessionStorage.auth_token,
+        // or JSON {data:{access_token}} under "auth_data" in local/session storage.
+        val js = """
+            (function(){
+              function fromAuthData(s){ try { var j = JSON.parse(s.getItem('auth_data')||'null');
+                return j && j.data && j.data.access_token || null; } catch(e){ return null; } }
+              return sessionStorage.getItem('auth_token') || fromAuthData(localStorage) || fromAuthData(sessionStorage) || null;
+            })()
+        """.trimIndent()
+        val raw = suspendCancellableCoroutine { cont -> w.evaluateJavascript(js) { cont.resume(it) } }
+        val stored = runCatching { JSONTokener(raw).nextValue() as? String }.getOrNull()
+        val candidates = listOfNotNull(stored, seenToken).distinct()
+        val ua = w.settings.userAgentString
+        val good = withContext(Dispatchers.IO) {
+            candidates.firstOrNull { t ->
+                runCatching { RedGifsApi(t, ua).checkSignedIn() }
+                    .onFailure { if (it !is AuthException) AppLog.w("Sign-in check failed: ${it.message}") }
+                    .isSuccess
+            }
+        }
+        if (good == null) {
+            if (!quiet) AppLog.w("Sign-in not complete (${candidates.size} token candidates, none accepted)")
+            return "Not signed in yet. Finish logging in on the page, then tap Done."
+        }
+        val exp = Session.expiryOf(good)
+        // While renewing automatically, wait for a token with real time left on it.
+        if (quiet && exp > 0 && exp - System.currentTimeMillis() / 1000 < Session.RENEW_MARGIN_S) {
+            return "Waiting for a fresh session…"
+        }
+        library.prefs.apply { token = good; userAgent = ua; tokenExp = exp }
+        AppLog.i(if (renew) "Session renewed" else "Signed in" + if (exp > 0) " (token valid until ${java.util.Date(exp * 1000)})" else "")
+        setResult(RESULT_OK)
+        finish()
+        return null
+    }
+
+    override fun onDestroy() {
+        web?.destroy()
+        web = null
+        super.onDestroy()
+    }
+}
