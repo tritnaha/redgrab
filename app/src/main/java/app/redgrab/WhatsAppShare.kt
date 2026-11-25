@@ -44,8 +44,9 @@ object WhatsAppShare {
         // A fresh folder per share: a clip WhatsApp is still reading is never overwritten by the next share.
         val dir = File(ctx.cacheDir, "share/${System.currentTimeMillis()}").apply { mkdirs() }
         clips.map { clip ->
-            val ext = if (clip.imported) clip.copyFile!!.substringAfterLast('.', "mp4").lowercase() else "mp4"
-            val out = File(dir, "${clip.id}.$ext")
+            val ext = (if (clip.imported) clip.copyFile!!.substringAfterLast('.', "mp4").lowercase() else "mp4")
+                .takeIf { it in Clip.IMAGE_EXT || it in Clip.VIDEO_EXT } ?: "mp4"
+            val out = File(dir, clip.id.replace(Regex("[^A-Za-z0-9_-]"), "_") + ".$ext")
             val local = lib.localFile(clip)
             when {
                 local != null -> ctx.contentResolver.openInputStream(local.first)!!.use { i -> out.outputStream().use { i.copyTo(it) } }

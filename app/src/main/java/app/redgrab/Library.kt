@@ -86,6 +86,9 @@ data class Clip(
     }
 
     companion object {
+        private val ID_RE = Regex("[a-z0-9_-]{1,80}")
+        /** IDs are used in file names: letters, digits, dash and underscore only. */
+        fun validId(id: String) = ID_RE.matches(id)
         val IMAGE_EXT = setOf("gif", "webp", "png", "jpg", "jpeg")
         val VIDEO_EXT = setOf("mp4", "webm", "m4v", "mov", "mkv")
         fun fromJson(j: JSONObject) = Clip(
@@ -545,6 +548,8 @@ class Library(private val ctx: Context) {
 
     /** Content URI for a file in the save folder, built without listing the folder (fast). */
     fun fileUri(name: String): Uri? {
+        // Names stay inside the save folder ("imported/<file>" is the only subfolder used).
+        if (name.isEmpty() || name.startsWith("/") || '\\' in name || name.split('/').any { it == ".." || it == "." }) return null
         val folder = prefs.folderUri ?: return null
         return runCatching {
             val parentId = if (DocumentsContract.isDocumentUri(ctx, folder)) DocumentsContract.getDocumentId(folder)
@@ -829,7 +834,7 @@ class Library(private val ctx: Context) {
 
     // ---- thumbnails stored on the phone (so the library works offline) ---------------
 
-    fun thumbFile(id: String) = File(thumbDir, "$id.jpg")
+    fun thumbFile(id: String) = File(thumbDir, id.replace(UNSAFE_NAME, "_") + ".jpg")
 
     /** Saves a still frame of a saved video as its thumbnail. Returns true on success. */
     fun makeThumb(id: String, video: Uri): Boolean = runCatching {
@@ -842,7 +847,7 @@ class Library(private val ctx: Context) {
             val bmp = (if (android.os.Build.VERSION.SDK_INT >= 27)
                 r.getScaledFrameAtTime(at, android.media.MediaMetadataRetriever.OPTION_CLOSEST_SYNC, 480, 480)
             else r.getFrameAtTime(at)) ?: return@runCatching false
-            val tmp = File(thumbDir, "$id.tmp")
+            val tmp = File(thumbFile(id).path + ".tmp")
             tmp.outputStream().use { bmp.compress(android.graphics.Bitmap.CompressFormat.JPEG, 82, it) }
             bmp.recycle()
             tmp.renameTo(thumbFile(id))
@@ -896,7 +901,7 @@ class Library(private val ctx: Context) {
         val opts = android.graphics.BitmapFactory.Options().apply { inSampleSize = sample }
         val bmp = ctx.contentResolver.openInputStream(image)!!.use { android.graphics.BitmapFactory.decodeStream(it, null, opts) }
             ?: return@runCatching null
-        val tmp = File(thumbDir, "$id.tmp")
+        val tmp = File(thumbFile(id).path + ".tmp")
         tmp.outputStream().use { bmp.compress(android.graphics.Bitmap.CompressFormat.JPEG, 82, it) }
         bmp.recycle()
         tmp.renameTo(thumbFile(id))
@@ -1117,8 +1122,8 @@ class Library(private val ctx: Context) {
                 JSONObject(f.readText()).let { j -> j.keys().asSequence().toList().map { make(it, j) } }
             fun lines(f: File): List<String> = f.readLines().map { it.trim() }.filter { it.isNotEmpty() }
 
-            val lib = read("library.json") { f -> array(f).map(Clip::fromJson) }.distinctBy { it.id }
-            val ext = read("extras.json") { f -> array(f).map(Clip::fromJson) }.distinctBy { it.id }
+            val lib = read("library.json") { f -> array(f).map(Clip::fromJson) }.filter { Clip.validId(it.id) }.distinctBy { it.id }
+            val ext = read("extras.json") { f -> array(f).map(Clip::fromJson) }.filter { Clip.validId(it.id) }.distinctBy { it.id }
             val ovr = read("overrides.json") { f -> obj(f) { k, j -> OverrideRow.of(k, MetaOverride.fromJson(j.getJSONObject(k))) } }
             val cps = read("copies.json") { f -> array(f).map { CopyRow.of(EditCopy.fromJson(it)) } }
             val hid = read("hidden.txt") { f -> lines(f).map(::HiddenRow) }
@@ -1166,6 +1171,7 @@ class Library(private val ctx: Context) {
 
     companion object {
         private val EDIT_RE = Regex(".+-edit-[0-9]+")
+        private val UNSAFE_NAME = Regex("[^A-Za-z0-9_-]")
         /** Subfolder of the save folder that holds imported files. */
         const val IMPORT_DIR = "imported"
         private val LEGACY_FILES = listOf("library.json", "extras.json", "overrides.json", "copies.json", "hidden.txt",

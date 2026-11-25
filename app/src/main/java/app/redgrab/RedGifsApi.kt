@@ -265,7 +265,8 @@ class RedGifsApi(private val token: String, private val userAgent: String) {
     }
 
     private fun parseClip(g: JSONObject, source: String): Clip? {
-        val id = g.optString("id").ifEmpty { return null }.lowercase()
+        // The ID becomes part of file names, so only plain IDs are accepted.
+        val id = g.optString("id").lowercase().takeIf { Clip.validId(it) } ?: return null
         val urls = g.optJSONObject("urls") ?: return null
         fun url(k: String) = urls.optString(k).takeIf { it.startsWith("http") }
         val hd = url("hd")

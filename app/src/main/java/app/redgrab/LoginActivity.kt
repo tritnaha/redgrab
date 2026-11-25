@@ -64,6 +64,14 @@ class LoginActivity : ComponentActivity() {
 
     /** Last bearer token seen on a request to api.redgifs.com. */
     @Volatile private var seenToken: String? = null
+    /** True while the page shown is on redgifs.com (tokens are only read then). */
+    @Volatile private var onRedgifs = false
+
+    private fun isRedgifs(url: String?): Boolean {
+        val u = runCatching { android.net.Uri.parse(url ?: "") }.getOrNull() ?: return false
+        val host = u.host?.lowercase() ?: return false
+        return u.scheme == "https" && (host == "redgifs.com" || host.endsWith(".redgifs.com"))
+    }
     private var web: WebView? = null
 
     @OptIn(ExperimentalMaterial3Api::class)
@@ -156,7 +164,7 @@ class LoginActivity : ComponentActivity() {
         w.settings.domStorageEnabled = true
         w.webViewClient = object : WebViewClient() {
             override fun shouldInterceptRequest(view: WebView, req: WebResourceRequest): WebResourceResponse? {
-                if (req.url.host == "api.redgifs.com") {
+                if (onRedgifs && req.url.host == "api.redgifs.com") {
                     req.requestHeaders.entries
                         .firstOrNull { it.key.equals("Authorization", ignoreCase = true) }
                         ?.value?.removePrefix("Bearer ")?.trim()
@@ -166,7 +174,13 @@ class LoginActivity : ComponentActivity() {
                 return null
             }
 
+            override fun onPageStarted(view: WebView, url: String?, favicon: android.graphics.Bitmap?) {
+                onRedgifs = isRedgifs(url)
+                if (!onRedgifs) seenToken = null // a token seen earlier doesn't carry over to another site
+            }
+
             override fun doUpdateVisitedHistory(view: WebView, url: String?, isReload: Boolean) {
+                onRedgifs = isRedgifs(url)
                 onNav(view.canGoBack())
             }
 
@@ -194,6 +208,8 @@ class LoginActivity : ComponentActivity() {
     /** Returns an error message to show, or null after a successful sign-in (screen closes). */
     private suspend fun tryToken(quiet: Boolean): String? {
         val w = web ?: return "Page not ready yet."
+        // Another site's page could hold a token of its own choosing: only redgifs.com counts.
+        if (!isRedgifs(w.url)) return "Finish signing in on redgifs.com, then tap Done."
         // Where the site keeps its token (from its own JS): sessionStorage.auth_token,
         // or JSON {data:{access_token}} under "auth_data" in local/session storage.
         val js = """
