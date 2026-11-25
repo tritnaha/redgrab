@@ -584,11 +584,13 @@ class Library(private val ctx: Context) {
      * when there is one, because several previews decode at once), otherwise the SD stream when
      * [allowStream] is on. Second value: true = local file.
      */
-    fun previewSource(c: Clip, allowStream: Boolean): Pair<Uri, Boolean>? {
-        c.copyFile?.let { f -> return fileUri(f)?.takeIf(::exists)?.let { it to true } }
+    fun previewSource(c: Clip, allowStream: Boolean, verify: Boolean = true): Pair<Uri, Boolean>? {
+        // [verify] = false trusts the library's record of what is saved instead of asking the storage provider.
+        fun there(u: Uri) = !verify || exists(u)
+        c.copyFile?.let { f -> return fileUri(f)?.takeIf(::there)?.let { it to true } }
         val have = _state.value.qualities[c.id] ?: emptySet()
         for (q in listOf(Quality.SD, Quality.HD, Quality.LEGACY)) {
-            if (q in have) fileUri(q.fileName(c.id))?.takeIf(::exists)?.let { return it to true }
+            if (q in have) fileUri(q.fileName(c.id))?.takeIf(::there)?.let { return it to true }
         }
         if (!allowStream) return null
         return (c.sd ?: c.hd)?.let { Uri.parse(it) to false }

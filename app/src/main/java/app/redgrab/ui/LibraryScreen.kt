@@ -306,7 +306,8 @@ fun LibraryScreen(vm: MainViewModel, snack: SnackbarHostState, onSignIn: () -> U
             // Moving previews: the first few eligible tiles on screen, once scrolling stops.
             val streamOk = vm.previewUnsaved && !vm.offline
             val shownById = remember(shown) { shown.associateBy { it.id } }
-            val moving = rememberActivePreviews(gridState, vm.previewsActive, vm.previewLimit, changeKey = s.saved.size) { id ->
+            val moving = rememberActivePreviews(gridState, vm.previewsActive, vm.previewLimit, changeKey = s.saved.size,
+                cost = { id -> previewCost(shownById[id], s.qualities[id]) }) { id ->
                 id in s.saved || (streamOk && shownById[id]?.let { it.sd != null || it.hd != null } == true)
             }
             // Rows above the tiles keep a margin even when the tiles themselves run edge to edge.
@@ -436,7 +437,7 @@ fun LibraryScreen(vm: MainViewModel, snack: SnackbarHostState, onSignIn: () -> U
                         wall = vm.wall,
                         corner = m.corner,
                         compact = vm.columns >= 5,
-                        preview = if (clip.id in moving) ({ VideoPreview(vm, clip, streamOk, Modifier.fillMaxSize()) }) else null,
+                        preview = if (isPreviewing(moving, clip.id)) ({ VideoPreview(vm, clip, streamOk, Modifier.fillMaxSize()) }) else null,
                         saved = clip.id in s.saved,
                         qualities = s.qualities[clip.id] ?: emptySet(),
                         partial = clip.id in s.partial,

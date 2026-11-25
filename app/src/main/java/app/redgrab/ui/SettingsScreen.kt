@@ -203,7 +203,7 @@ fun SettingsScreen(vm: MainViewModel, onSignIn: () -> Unit, onOpenLog: () -> Uni
                             SegmentedButton(vm.previewCount == n, { vm.changePreviewCount(n) }, SegmentedButtonDefaults.itemShape(i, 4)) { Text(if (n == 0) "All" else "$n") }
                         }
                     }
-                    Text("All: everything on screen (up to ${maxPreviews} on this phone). Fewer saves battery; the rest stay as stills.",
+                    Text("All: everything on screen, as far as this phone can decode at once (HD files count for more than small ones). Fewer saves battery; the rest stay as stills.",
                         style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(horizontal = 16.dp).padding(bottom = 12.dp))
                 }
