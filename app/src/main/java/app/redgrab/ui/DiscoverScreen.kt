@@ -57,6 +57,8 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.launch
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -125,7 +127,7 @@ fun DiscoverScreen(vm: MainViewModel, onSignIn: () -> Unit, onOpenSettings: () -
     // Load the next page shortly before the end of the list.
     val nearEnd by remember { derivedStateOf { (grid.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0) >= grid.layoutInfo.totalItemsCount - 9 } }
     LaunchedEffect(nearEnd, d.items.size) { if (nearEnd && d.items.isNotEmpty()) vm.loadMoreDiscover() }
-    LaunchedEffect(d.feed, d.order) { grid.scrollToItem(0) }
+    LaunchedEffect(d.feed, d.order, d.firstPage) { grid.scrollToItem(0) }
 
     BackHandler(enabled = !home) { vm.openFeed(Feed.home(source)) }
 
@@ -235,13 +237,14 @@ fun DiscoverScreen(vm: MainViewModel, onSignIn: () -> Unit, onOpenSettings: () -
             val recent = if (source == OnlineSource.RedGifs) emptyList() else vm.recents.map { Feed.fromQuery(source, it) }
             (mine + recent + d.subs.map { Feed.Subreddit(it) }).distinctBy { it.title.lowercase() }.filter { !it.needsQuery }
         }
+        Box(Modifier.padding(pad).fillMaxSize()) {
         LazyVerticalStaggeredGrid(
             state = grid,
             columns = StaggeredGridCells.Fixed(vm.columns),
             contentPadding = PaddingValues(start = m.side, end = m.side, top = 6.dp, bottom = navPad + 12.dp),
             horizontalArrangement = Arrangement.spacedBy(m.gap),
             verticalItemSpacing = m.gap,
-            modifier = Modifier.padding(pad).fillMaxSize().then(pinchColumns { vm.changeColumns(vm.columns + it) }),
+            modifier = Modifier.fillMaxSize().then(pinchColumns { vm.changeColumns(vm.columns + it) }),
         ) {
             item(span = StaggeredGridItemSpan.FullLine) {
                 val hint = when (source) {
@@ -333,6 +336,33 @@ fun DiscoverScreen(vm: MainViewModel, onSignIn: () -> Unit, onOpenSettings: () -
                     }
                 }
             }
+        }
+        // Where you are in the feed, and the way back up. Pages are the site's own; on sites that
+        // number them (RedGifs, sex.com) any page can be opened, on the others only those loaded so far.
+        val itemIndex = remember(d.items) { HashMap<String, Int>(d.items.size * 2).apply { d.items.forEachIndexed { i, c -> put(c.id, i) } } }
+        val page by remember(d.items, d.pageStarts, d.firstPage) {
+            derivedStateOf {
+                pageAt(grid.layoutInfo.visibleItemsInfo.firstNotNullOfOrNull { (it.key as? String)?.let(itemIndex::get) } ?: 0, d.pageStarts, d.firstPage)
+            }
+        }
+        val atTop by remember { derivedStateOf { grid.firstVisibleItemIndex == 0 && grid.firstVisibleItemScrollOffset == 0 } }
+        val lastLoaded = d.firstPage + (d.pageStarts.size - 1).coerceAtLeast(0)
+        val known = d.feed.numbered && d.pages > 0
+        if (d.items.isNotEmpty() && (lastLoaded > 1 || known || !atTop)) {
+            val jumps = rememberCoroutineScope()
+            PositionPill(page, if (known) d.pages else lastLoaded, more = !known && d.hasMore,
+                reach = if (known) d.pages else lastLoaded, atTop = atTop && d.firstPage == 1,
+                modifier = Modifier.align(Alignment.BottomEnd).padding(end = 12.dp, bottom = navPad + 12.dp),
+                onTop = { if (d.firstPage > 1) vm.jumpToOnlinePage(1) else jumps.launch { grid.scrollToItem(0) } },
+                onJump = { n ->
+                    val at = d.pageStarts.getOrNull(n - d.firstPage)
+                    when {
+                        // Already loaded: scroll there. The rows above the clips come first in the grid; one row follows them.
+                        at != null -> jumps.launch { grid.scrollToItem(if (n == d.firstPage) 0 else (grid.layoutInfo.totalItemsCount - d.items.size - 1).coerceAtLeast(0) + at) }
+                        d.feed.numbered -> vm.jumpToOnlinePage(n)
+                    }
+                })
+        }
         }
     }
 }

@@ -36,6 +36,24 @@ class PreviewsTest {
         assertEquals(emptyList<String>(), pickPreviews(all, all.toSet(), max = 10, budget = 99f) { 1f })
     }
 
+    @Test fun pagesOfTheSavedGridAndOfOnlineFeeds() {
+        // The Saved grid: a page is every 50 clips.
+        assertEquals(1, app.redgrab.ui.pageOf(0)); assertEquals(1, app.redgrab.ui.pageOf(49)); assertEquals(2, app.redgrab.ui.pageOf(50))
+        assertEquals(13, app.redgrab.ui.pageOf(612))
+        assertEquals(1, app.redgrab.ui.pageCount(0)); assertEquals(1, app.redgrab.ui.pageCount(50)); assertEquals(2, app.redgrab.ui.pageCount(51))
+        assertEquals(29, app.redgrab.ui.pageCount(1430))
+        // Online: the site's own pages, of whatever length each turned out to be.
+        val starts = listOf(0, 26, 66, 104)
+        assertEquals(1, app.redgrab.ui.pageAt(0, starts, firstPage = 1))
+        assertEquals(1, app.redgrab.ui.pageAt(25, starts, firstPage = 1))
+        assertEquals(2, app.redgrab.ui.pageAt(26, starts, firstPage = 1))
+        assertEquals(4, app.redgrab.ui.pageAt(500, starts, firstPage = 1))
+        // After opening a feed straight at page 30.
+        assertEquals(30, app.redgrab.ui.pageAt(0, listOf(0, 40), firstPage = 30))
+        assertEquals(31, app.redgrab.ui.pageAt(40, listOf(0, 40), firstPage = 30))
+        assertEquals(1, app.redgrab.ui.pageAt(0, emptyList(), firstPage = 1))
+    }
+
     private fun clip(w: Int, h: Int, hd: String? = "https://x/y.mp4", sd: String? = "https://x/y-sd.mp4", file: String? = null) =
         Clip(id = "c", hd = hd, sd = sd, thumb = null, duration = 5.0, width = w, height = h, hasAudio = false, user = "", created = 0,
             sources = emptySet(), copyFile = file)

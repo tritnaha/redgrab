@@ -66,6 +66,10 @@ class LiveRedGifsTest {
         val home2 = api.searchClips("", OnlineOrder.Trending, 2, extras)
         check("Home feed, page 2", home2)
         say("page 2 repeats ${home2.clips.count { c -> home.clips.any { it.id == c.id } }} clip(s) of page 1")
+        // Jumping straight to a later page, as "Go to page" does.
+        val far = api.searchClips("", OnlineOrder.Trending, 30, extras)
+        check("Home feed, page 30 opened directly", far)
+        assertEquals(30, far.page)
         for (order in OnlineOrder.entries) check("Search \"dance\", ${order.label}", api.searchClips("dance", order, 1, extras))
 
         // A creator's clips and the "related" list, starting from a clip of the home feed.

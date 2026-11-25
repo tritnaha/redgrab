@@ -471,6 +471,27 @@ fun LibraryScreen(vm: MainViewModel, snack: SnackbarHostState, onSignIn: () -> U
                     }
                 }
             }
+            // Where you are in the list, and the way back up. The Saved grid has no pages of its
+            // own, so a page is every 50 clips of what is listed now.
+            val shownIndex = remember(shown) { HashMap<String, Int>(shown.size * 2).apply { shown.forEachIndexed { i, c -> put(c.id, i) } } }
+            val page by remember(shown) {
+                derivedStateOf { pageOf(gridState.layoutInfo.visibleItemsInfo.firstNotNullOfOrNull { (it.key as? String)?.let(shownIndex::get) } ?: 0) }
+            }
+            val atTop by remember { derivedStateOf { gridState.firstVisibleItemIndex == 0 && gridState.firstVisibleItemScrollOffset == 0 } }
+            val pages = pageCount(shown.size)
+            if (pages > 1 && !selecting) {
+                val jumps = rememberCoroutineScope()
+                PositionPill(page, pages, more = false, reach = pages, atTop = atTop,
+                    modifier = Modifier.align(Alignment.BottomEnd).padding(end = 12.dp, bottom = navPad + 12.dp),
+                    onTop = { jumps.launch { gridState.scrollToItem(0) } },
+                    onJump = { n ->
+                        jumps.launch {
+                            // The rows above the clips (search, filters, banners) come first in the grid.
+                            val head = (gridState.layoutInfo.totalItemsCount - shown.size).coerceAtLeast(0)
+                            gridState.scrollToItem(if (n <= 1) 0 else head + (n - 1) * LIBRARY_PAGE)
+                        }
+                    })
+            }
         }
     }
 

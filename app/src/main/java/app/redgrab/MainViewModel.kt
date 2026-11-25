@@ -125,28 +125,34 @@ sealed interface Feed {
     val needsQuery: Boolean get() = false
     /** Sort orders the feed offers; empty = it has just one order. */
     val orders: List<OnlineOrder> get() = emptyList()
+    /** The site numbers this feed's pages, so any page can be opened directly (others only continue from the last one). */
+    val numbered: Boolean get() = false
 
     // RedGifs
     data class Search(override val query: String) : Feed {
         override val title get() = if (query.isBlank()) "All of RedGifs" else "Search: $query"
         override val source get() = OnlineSource.RedGifs
         override val orders get() = OnlineOrder.entries
+        override val numbered get() = true
     }
     data class Niche(val id: String, val name: String) : Feed {
         override val title get() = name
         override val source get() = OnlineSource.RedGifs
         // Niche feeds have no "top this week / month"; RedGifs rejects those.
         override val orders get() = listOf(OnlineOrder.Trending, OnlineOrder.New, OnlineOrder.TopAll)
+        override val numbered get() = true
     }
     data class Performer(val name: String) : Feed {
         override val title get() = name
         override val source get() = OnlineSource.RedGifs
         // Creator feeds only sort by newest or top.
         override val orders get() = listOf(OnlineOrder.New, OnlineOrder.TopAll)
+        override val numbered get() = true
     }
     data class Related(val clipId: String, val label: String) : Feed {
         override val title get() = "Related to $label"
         override val source get() = OnlineSource.RedGifs
+        override val numbered get() = true
     }
 
     // Reddit
@@ -194,6 +200,7 @@ sealed interface Feed {
         override val title get() = query
         override val source get() = OnlineSource.SexCom
         override val needsQuery get() = query.isBlank()
+        override val numbered get() = true
     }
 
     // EroMe (albums found by search, or one uploader's albums)
@@ -262,6 +269,12 @@ data class DiscoverState(
     val page: Int = 0,
     /** Where the next page starts, for feeds that continue from a marker instead of a page number. */
     val cursor: String? = null,
+    /** The page the list starts at (not 1 after jumping straight to a page). */
+    val firstPage: Int = 1,
+    /** Where in [items] each loaded page begins, in order; the first belongs to [firstPage]. */
+    val pageStarts: List<Int> = emptyList(),
+    /** How many pages the site says there are; 0 = it doesn't say. */
+    val pages: Int = 0,
     val hasMore: Boolean = true,
     val loading: Boolean = false,
     val error: String? = null,
@@ -818,15 +831,21 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     // ---- Discover (online browsing) ---------------------------------------------------
 
-    fun openFeed(feed: Feed, order: OnlineOrder = discover.order) {
+    /** [startPage]: open a numbered feed at that page instead of the first. */
+    fun openFeed(feed: Feed, order: OnlineOrder = discover.order, startPage: Int = 1) {
+        val first = if (feed.numbered) startPage.coerceAtLeast(1) else 1
         discoverJob?.cancel()
         if (feed.source != discover.feed.source) {
             prefs.onlineSource = feed.source.name
             recents = prefs.recent(feed.source.name)
         }
-        discover = discover.copy(feed = feed, order = order, items = emptyList(), page = 0, cursor = null, hasMore = true, loading = false, error = null)
+        discover = discover.copy(feed = feed, order = order, items = emptyList(), page = first - 1, cursor = null, firstPage = first,
+            pageStarts = emptyList(), pages = 0, hasMore = true, loading = false, error = null)
         loadMoreDiscover()
     }
+
+    /** Opens the feed on screen at page [n] (numbered feeds only). */
+    fun jumpToOnlinePage(n: Int) = openFeed(discover.feed, discover.order, startPage = n)
 
     fun changeDiscoverOrder(order: OnlineOrder) = openFeed(discover.feed, order)
 
@@ -920,7 +939,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             val result = withContext(Dispatchers.IO) { runCatching { fetchPage(d, next) } }
             result.onSuccess { pg ->
                 val seen = discover.items.mapTo(HashSet()) { it.id }
-                discover = discover.copy(items = discover.items + pg.clips.filter { it.id !in seen }, page = next, cursor = pg.cursor,
+                val fresh = pg.clips.filter { it.id !in seen }
+                discover = discover.copy(items = discover.items + fresh, page = next, cursor = pg.cursor,
+                    // A page that added nothing isn't a place you can be.
+                    pageStarts = if (fresh.isEmpty()) discover.pageStarts else discover.pageStarts + discover.items.size,
+                    pages = if (pg.pages > 0) pg.pages else discover.pages,
                     // A page can come back empty (no playable posts) and still have more behind it.
                     hasMore = pg.hasMore && (pg.clips.isNotEmpty() || pg.cursor != null), loading = false)
                 if (source != OnlineSource.RedGifs && next == 1 && pg.clips.isNotEmpty() && d.feed.query.isNotBlank()) {
