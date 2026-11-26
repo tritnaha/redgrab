@@ -67,6 +67,7 @@ class FeedExtras {
  * third-party API access, so endpoints and fields were taken from the site's own JavaScript
  * (2026-11) and may change without notice.
  *
+ *  - GET  v2/feeds/for-you?page&count                  → {gifs, page, pages?, …} (user token only)
  *  - GET  v2/feeds/liked?type=g&page&count(10..100)   → {gifs, users, niches?, page, pages, total}
  *  - GET  v2/me/collections?page&count                 → {collections:[{folderId, folderName}], pages}
  *  - GET  v2/me/collections/{id}/gifs?page&count       → {gifs, users, page, pages, total}
@@ -265,6 +266,13 @@ class RedGifsApi(private val token: String, private val userAgent: String) {
         val o = when (order) { OnlineOrder.Trending -> "hot"; OnlineOrder.New -> "latest"; else -> "best" }
         return onlinePage("v2/niches/${enc(nicheId)}/gifs?count=40&page=$page&order=$o&type=g", page, extras)
     }
+
+    /**
+     * Your "For You" feed: what the site's home page shows a signed-in user. Needs a user's token
+     * (a visitor gets 401 "UserTokenRequired"). The site also sends an analytics session ID with
+     * this request; it is left out here.
+     */
+    suspend fun forYou(page: Int, extras: FeedExtras): OnlinePage = onlinePage("v2/feeds/for-you?page=$page&count=40", page, extras)
 
     /** Site-wide search by free text; an empty query gives the general feed in that order. */
     suspend fun searchClips(query: String, order: OnlineOrder, page: Int, extras: FeedExtras): OnlinePage {

@@ -72,6 +72,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.redgrab.BuildConfig
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
+import androidx.compose.material.icons.filled.Category
 import androidx.compose.material.icons.filled.Compress
 import app.redgrab.Format
 import app.redgrab.PreviewMaker
@@ -188,6 +189,9 @@ fun SettingsScreen(vm: MainViewModel, onSignIn: () -> Unit, onOpenLog: () -> Uni
             Section("Downloads") {
                 Row_(Icons.Default.HighQuality, "HD first",
                     "Clips are saved in HD. SD is used only when a clip has no HD version, or when you pick \"Download in SD\" (selection menu) or tap the SD icon in the player.")
+                SwitchRow(Icons.Default.Category, "Ask for a category",
+                    "When saving a clip from Online.",
+                    vm.askCategory, onChange = vm::changeAskCategory)
                 SwitchRow(Icons.Default.CollectionsBookmark, "Include my collections",
                     "Clips in your collections are listed alongside your likes (each clip only once).",
                     vm.includeCollections, onChange = vm::changeIncludeCollections)

@@ -537,4 +537,13 @@ class SourcesTest {
             try { save(bad); fail("expected a refusal") } catch (e: HlsSaver.Unsupported) { }
         }
     }
+
+    @Test fun redGifsOpensOnForYou() {
+        assertEquals(Feed.ForYou, Feed.home(OnlineSource.RedGifs))
+        assertEquals(OnlineSource.RedGifs, Feed.ForYou.source)
+        // One order only, pages numbered, nothing to type first.
+        assertTrue(Feed.ForYou.orders.isEmpty() && Feed.ForYou.numbered && !Feed.ForYou.needsQuery)
+        // An empty search is still the general feed.
+        assertEquals(Feed.Search(""), Feed.fromQuery(OnlineSource.RedGifs, " "))
+    }
 }

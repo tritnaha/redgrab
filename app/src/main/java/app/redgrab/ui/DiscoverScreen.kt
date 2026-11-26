@@ -109,7 +109,7 @@ fun DiscoverScreen(vm: MainViewModel, onSignIn: () -> Unit, onOpenSettings: () -
     val keyboard = LocalSoftwareKeyboardController.current
     var query by rememberSaveable(d.feed) { mutableStateOf(d.feed.query) }
     val byId = remember(s.clips) { s.clips.associateBy { it.id } }
-    val home = d.feed == Feed.home(source)
+    val home = d.feed == vm.homeFeed(source)
     // What each site needs before anything can load: RedGifs a sign-in, Reddit a client ID.
     val ready = when (source) {
         OnlineSource.RedGifs -> vm.signedIn
@@ -129,7 +129,7 @@ fun DiscoverScreen(vm: MainViewModel, onSignIn: () -> Unit, onOpenSettings: () -
     LaunchedEffect(nearEnd, d.items.size) { if (nearEnd && d.items.isNotEmpty()) vm.loadMoreDiscover() }
     LaunchedEffect(d.feed, d.order, d.firstPage) { grid.scrollToItem(0) }
 
-    BackHandler(enabled = !home) { vm.openFeed(Feed.home(source)) }
+    BackHandler(enabled = !home) { vm.openFeed(vm.homeFeed(source)) }
 
     val m = gridMetrics(vm.wall)
     val navPad = LocalNavPad.current
@@ -156,7 +156,7 @@ fun DiscoverScreen(vm: MainViewModel, onSignIn: () -> Unit, onOpenSettings: () -
                     IconButton(onClick = { showView = true }) { Icon(Icons.Default.GridView, "View: grid or wall, preview size") }
                 },
                 navigationIcon = {
-                    if (!home) IconButton(onClick = { vm.openFeed(Feed.home(source)) }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back to all") }
+                    if (!home) IconButton(onClick = { vm.openFeed(vm.homeFeed(source)) }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back to all") }
                 },
                 title = {
                     // The title is the source switch: tap it to pick another site.
@@ -231,10 +231,11 @@ fun DiscoverScreen(vm: MainViewModel, onSignIn: () -> Unit, onOpenSettings: () -
         val moving = rememberActivePreviews(grid, vm.previewsActive, vm.previewLimit, changeKey = s.saved.size,
             cost = { id -> previewCost(byId[id] ?: onlineById[id], s.qualities[id], vm.previewCopies && id in s.localPreviews) }) { id -> id in s.saved || streamOk }
         val head = Modifier.padding(horizontal = m.head)
-        // Shortcuts: on Reddit your saved and upvoted posts and the subreddits you joined; then what you opened recently.
+        // Shortcuts: on RedGifs "For you" and the general feed; on Reddit your saved and upvoted posts and the
+        // subreddits you joined; elsewhere what you opened recently.
         val shortcuts = remember(source, d.subs, vm.recents, vm.redditUser) {
             val mine = if (source == OnlineSource.Reddit && vm.redditUser != null) listOf(Feed.RedditSaved, Feed.RedditUpvoted) else emptyList()
-            val recent = if (source == OnlineSource.RedGifs) emptyList() else vm.recents.map { Feed.fromQuery(source, it) }
+            val recent = if (source == OnlineSource.RedGifs) listOf(Feed.ForYou, Feed.Search("")) else vm.recents.map { Feed.fromQuery(source, it) }
             (mine + recent + d.subs.map { Feed.Subreddit(it) }).distinctBy { it.title.lowercase() }.filter { !it.needsQuery }
         }
         Box(Modifier.padding(pad).fillMaxSize()) {

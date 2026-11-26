@@ -129,6 +129,12 @@ sealed interface Feed {
     val numbered: Boolean get() = false
 
     // RedGifs
+    /** What the site's home page shows you when signed in. */
+    data object ForYou : Feed {
+        override val title get() = "For you"
+        override val source get() = OnlineSource.RedGifs
+        override val numbered get() = true
+    }
     data class Search(override val query: String) : Feed {
         override val title get() = if (query.isBlank()) "All of RedGifs" else "Search: $query"
         override val source get() = OnlineSource.RedGifs
@@ -224,7 +230,7 @@ sealed interface Feed {
     companion object {
         /** What a source shows first. */
         fun home(s: OnlineSource): Feed = when (s) {
-            OnlineSource.RedGifs -> Search("")
+            OnlineSource.RedGifs -> ForYou
             OnlineSource.Reddit -> RedditHome
             OnlineSource.FikFap -> FikFapTag("")
             OnlineSource.SexCom -> SexSearch("")
@@ -421,6 +427,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     init {
         refreshFolderInfo()
+        // When a download run ends, no Save button is left showing progress.
+        viewModelScope.launch {
+            var was = false
+            library.download.collect { p -> if (was && !p.running && !p.waiting) saveRequested = emptySet(); was = p.running }
+        }
         // Re-check the save folder on every launch so files added, moved or deleted outside
         // the app (or saved by older versions) are reflected without a sync.
         watchNetwork()
@@ -840,18 +851,77 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         player = PlayerSession(list.map { it.id }, index.coerceIn(0, list.lastIndex), list.filter { it.id !in known }.associateBy { it.id })
     }
 
-    /** Adds an online clip to the library and saves it (HD first). Pictures and 4chan's files go straight into the save folder. */
-    fun saveOnline(clip: Clip, q: Quality? = null) {
-        if (OnlineSource.keepsOwnFile(clip)) return saveOnlineFile(clip)
+    /** An online clip waiting for "which category?" before it is saved. */
+    data class SaveRequest(val clip: Clip, val quality: Quality?)
+    var saveRequest by mutableStateOf<SaveRequest?>(null)
+        private set
+    var askCategory by mutableStateOf(prefs.askCategory)
+        private set
+    fun changeAskCategory(v: Boolean) { prefs.askCategory = v; askCategory = v }
+    fun cancelSave() { saveRequest = null }
+    /** Your categories, most used first. */
+    fun categories(): List<String> = state.value.clips.filter { it.category.isNotBlank() }.groupingBy { it.category }.eachCount()
+        .entries.sortedWith(compareByDescending<Map.Entry<String, Int>> { it.value }.thenBy { it.key.lowercase() }).map { it.key }
+
+    /** Clips whose save was asked for in this run and hasn't finished: their Save button shows the progress. */
+    var saveRequested by mutableStateOf<Set<String>>(emptySet())
+        private set
+    /** How far a file saved directly (pictures, 4chan) has come: 0..1, or -1 while the size isn't known. */
+    var savingFraction by mutableStateOf<Map<String, Float>>(emptyMap())
+        private set
+
+    /**
+     * Where the saving of a clip stands, for its Save button: null = not being saved, -1 = being
+     * saved or waiting its turn with no known size, else 0..1.
+     */
+    fun saveProgress(id: String, dl: DownloadProgress, s: LibraryState): Float? = when {
+        id in savingImages -> savingFraction[id] ?: -1f
+        id in s.saved -> null
+        dl.running && dl.currentId == id -> if (dl.currentTotal > 0) (dl.currentBytes.toFloat() / dl.currentTotal).coerceIn(0f, 1f) else -1f
+        id in saveRequested && id !in s.failures && !dl.paused -> -1f
+        else -> null
+    }
+
+    /**
+     * Saves an online clip. Asks for a category first when that is switched on ([category] null);
+     * "" = no category. Then adds the clip to the library and saves it (HD first). Pictures and
+     * 4chan's files go straight into the save folder.
+     */
+    fun saveOnline(clip: Clip, q: Quality? = null, category: String? = null) {
+        if (category == null && askCategory) { saveRequest = SaveRequest(clip, q); return }
+        saveRequest = null
+        val cat = category?.trim().orEmpty()
+        if (OnlineSource.keepsOwnFile(clip)) return saveOnlineFile(clip, cat)
+        saveRequested = saveRequested + clip.id
         viewModelScope.launch(Dispatchers.IO) {
             // A RedGifs clip found on Reddit has no video addresses until RedGifs is asked for them.
-            val c = if (clip.hd == null && clip.sd == null) resolveOnline(clip) ?: return@launch say("Couldn't get this clip from RedGifs.") else clip
+            val c = if (clip.hd == null && clip.sd == null) resolveOnline(clip) else clip
+            if (c == null) {
+                withContext(Dispatchers.Main) { saveRequested = saveRequested - clip.id }
+                return@launch say("Couldn't get this clip from RedGifs.")
+            }
             library.addExtra(c)
+            if (cat.isNotEmpty()) library.setCategory(c.id, cat)
             withContext(Dispatchers.Main) { if (q == null) download(c.id) else downloadQuality(c.id, q) }
+            settleSave(c.id)
         }
     }
 
-    private fun saveOnlineFile(clip: Clip) {
+    /** Saves a clip of the library from the player, with the progress on its Save button. */
+    fun downloadShown(id: String) {
+        saveRequested = saveRequested + id
+        download(id)
+        viewModelScope.launch { settleSave(id) }
+    }
+
+    /** Nothing started (no save folder, say): the button goes back to "Save". */
+    private suspend fun settleSave(id: String) {
+        kotlinx.coroutines.delay(4_000)
+        val dl = library.download.value
+        if (!dl.running && !dl.waiting) withContext(Dispatchers.Main) { saveRequested = saveRequested - id }
+    }
+
+    private fun saveOnlineFile(clip: Clip, category: String) {
         if (!hasFolder || library.folder() == null) return say("Choose a save folder first (Settings → Save folder).")
         if (clip.id in savingImages) return
         savingImages = savingImages + clip.id
@@ -863,9 +933,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 val tags = if (!sexCom || clip.tags.isNotEmpty()) clip.tags else
                     runCatching { SexComApi(http).tags(clip.id.removePrefix(OnlineSource.SexCom.prefix)) }
                         .onFailure { AppLog.w("No tags for ${clip.id}: ${it.message}") }.getOrDefault(emptyList())
-                library.addOnlineFile(clip.copy(tags = tags), http, if (sexCom) SexComApi.files(clip) else listOfNotNull(clip.hd))
+                var shown = -1
+                library.addOnlineFile(clip.copy(tags = tags), http, if (sexCom) SexComApi.files(clip) else listOfNotNull(clip.hd)) { done, total ->
+                    // Whole percents only, so the screen isn't redrawn for every chunk.
+                    val pct = if (total > 0) (done * 100 / total).toInt().coerceIn(0, 100) else -1
+                    if (pct != shown) { shown = pct; savingFraction = savingFraction + (clip.id to if (pct < 0) -1f else pct / 100f) }
+                }
+                if (category.isNotEmpty()) library.setCategory(clip.id, category)
             }
-            withContext(Dispatchers.Main) { savingImages = savingImages - clip.id }
+            withContext(Dispatchers.Main) { savingImages = savingImages - clip.id; savingFraction = savingFraction - clip.id }
             r.onSuccess { say("Saved") }.onFailure { e ->
                 AppLog.e("Saving ${clip.id} failed: ${e.message}", e.takeUnless { it is HttpException })
                 say("Couldn't save: ${DownloadWorker.reasonFor(e, OnlineSource.of(clip.id).label)}")
@@ -928,7 +1004,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun changeDiscoverOrder(order: OnlineOrder) = openFeed(discover.feed, order)
 
     /** Switches the Online tab to another site. */
-    fun changeSource(s: OnlineSource) { if (s != discover.feed.source) openFeed(Feed.home(s)) }
+    fun changeSource(s: OnlineSource) { if (s != discover.feed.source) openFeed(homeFeed(s)) }
+
+    /** RedGifs refused "For you" or had nothing in it: the general feed is the home for the rest of this run. */
+    private var forYouUnavailable by mutableStateOf(false)
+
+    /** What a source shows first. */
+    fun homeFeed(s: OnlineSource): Feed = if (s == OnlineSource.RedGifs && forYouUnavailable) Feed.Search("") else Feed.home(s)
 
     // ---- Reddit account ----------------------------------------------------------------
 
@@ -1015,6 +1097,17 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         discoverJob = viewModelScope.launch {
             val next = d.page + 1
             val result = withContext(Dispatchers.IO) { runCatching { fetchPage(d, next) } }
+            // "For you" with nothing in it (or refused by the site): show the general feed instead.
+            val failure = result.exceptionOrNull()
+            if (d.feed == Feed.ForYou && next == d.firstPage && d.items.isEmpty() &&
+                // A refusal counts too: if the sign-in really has lapsed, the general feed will say so.
+                (result.getOrNull()?.clips?.isEmpty() == true || failure is HttpException || failure is AuthException)) {
+                AppLog.w("For you: ${failure?.message ?: "empty"}; showing all of RedGifs instead")
+                forYouUnavailable = true
+                discover = discover.copy(loading = false)
+                openFeed(Feed.Search(""))
+                return@launch
+            }
             result.onSuccess { pg ->
                 val seen = discover.items.mapTo(HashSet()) { it.id }
                 val fresh = pg.clips.filter { it.id !in seen }
@@ -1049,6 +1142,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
         val http by lazy { RedGifsApi.clientFor(getApplication<Application>().userAgent) }
         return when (val f = d.feed) {
+            is Feed.ForYou -> redgifs { api, x -> api.forYou(next, x) }
             is Feed.Search -> redgifs { api, x -> api.searchClips(f.query, d.order, next, x) }
             is Feed.Niche -> redgifs { api, x -> api.nicheClips(f.id, d.order, next, x) }
             is Feed.Performer -> redgifs { api, x -> api.performerClips(f.name, d.order, next, x) }

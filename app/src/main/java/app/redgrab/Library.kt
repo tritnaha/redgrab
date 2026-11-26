@@ -179,6 +179,9 @@ data class DownloadProgress(
     val done: Int = 0,
     val failed: Int = 0,
     val currentId: String? = null,
+    /** Bytes of the clip being saved that are on the phone, and its full size (-1 = the server didn't say). */
+    val currentBytes: Long = 0,
+    val currentTotal: Long = -1,
     val bytesPerSec: Long = 0,
     val etaSec: Long = -1,
     val message: String = "",
@@ -794,6 +797,9 @@ class Library(private val ctx: Context) {
 
     fun override(id: String): MetaOverride? = synchronized(lock) { overrides[id] }
 
+    /** Puts a clip in one of your categories, keeping its other edits. */
+    fun setCategory(id: String, category: String) = setOverrides(mapOf(id to (override(id) ?: MetaOverride()).copy(category = category.trim())))
+
     // ---- edited copies -------------------------------------------------------------
 
     /** Next free `<id>-edit-N.mp4` name for an original. */
@@ -1111,7 +1117,7 @@ class Library(private val ctx: Context) {
      * tags. [urls] are tried in order; the first that turns out to be a real picture or video
      * is kept.
      */
-    fun addOnlineFile(c: Clip, http: okhttp3.OkHttpClient, urls: List<String>) {
+    fun addOnlineFile(c: Clip, http: okhttp3.OkHttpClient, urls: List<String>, onProgress: (Long, Long) -> Unit = { _, _ -> }) {
         require(Clip.validId(c.id)) { "Bad clip ID" }
         if (synchronized(lock) { imports.any { it.id == c.id } }) return
         val dir = importedDir(create = true) ?: error("Choose a save folder first")
@@ -1125,7 +1131,19 @@ class Library(private val ctx: Context) {
             try {
                 RedGifsApi.download(http, url).use { r ->
                     if (r.header("Content-Length") == "0" || r.body?.contentType()?.type == "text") throw java.io.IOException("Not a media file")
-                    resolver.openOutputStream(part.uri, "wt")!!.use { out -> r.body!!.byteStream().copyTo(out) }
+                    val total = r.body!!.contentLength()
+                    resolver.openOutputStream(part.uri, "wt")!!.use { out ->
+                        val input = r.body!!.byteStream()
+                        val buf = ByteArray(64 * 1024)
+                        var done = 0L
+                        while (true) {
+                            val n = input.read(buf)
+                            if (n < 0) break
+                            out.write(buf, 0, n)
+                            done += n
+                            onProgress(done, total)
+                        }
+                    }
                 }
                 // Reading its size doubles as the check that the file is what it says; also makes the offline thumbnail.
                 var duration = 0.0

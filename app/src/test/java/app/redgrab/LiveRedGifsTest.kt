@@ -60,7 +60,11 @@ class LiveRedGifsTest {
         assertTrue(api.likedClips(extras) { _, _, _ -> }.isEmpty())
         say("likes: the liked feed and the liked-ID list both answer (empty for a visitor)")
 
-        // The Online tab's home feed, a second page of it, and a search.
+        // "For you" is for signed-in users only: a visitor must be refused (which also shows the address exists).
+        try { api.forYou(1, extras); org.junit.Assert.fail("the For You feed answered a visitor") }
+        catch (e: AuthException) { say("For you: refused for a visitor, as the site does (it needs your sign-in)") }
+
+        // The general feed, a second page of it, and a search.
         val home = api.searchClips("", OnlineOrder.Trending, 1, extras)
         check("Home feed (trending)", home)
         val home2 = api.searchClips("", OnlineOrder.Trending, 2, extras)

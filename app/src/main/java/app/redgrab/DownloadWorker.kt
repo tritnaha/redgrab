@@ -225,10 +225,13 @@ class DownloadWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(c
             for ((i, item) in todo.withIndex()) {
                 val (clip, quality) = item
                 currentCoroutineContext().ensureActive()
-                progress = progress.copy(currentId = clip.id, message = "Saving clip ${i + 1} of ${todo.size}")
+                fileHave = 0; fileTotal = -1
+                progress = progress.copy(currentId = clip.id, currentBytes = 0, currentTotal = -1, message = "Saving clip ${i + 1} of ${todo.size}")
                 publish(progress, force = true)
                 try {
                     saveWithRetry(http, api, folder, clip, quality) { n ->
+                        fileHave += n
+                        progress = progress.copy(currentBytes = fileHave, currentTotal = fileTotal)
                         runBytes += n
                         windowBytes += n
                         val now = SystemClock.elapsedRealtime()
@@ -333,6 +336,10 @@ class DownloadWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(c
      * little longer each time). Thanks to the `.part` file each retry continues where the last
      * one stopped. Sign-in problems, human checks and "not found" are not retried.
      */
+    /** Bytes of the current clip on the phone and its full size (-1 = unknown, e.g. a stream), for the progress shown on its Save button. */
+    private var fileHave = 0L
+    private var fileTotal = -1L
+
     private suspend fun saveWithRetry(http: okhttp3.OkHttpClient, api: RedGifsApi?, folder: DocumentFile, clip: Clip, q: Quality, onBytes: suspend (Int) -> Unit) {
         var attempt = 0
         writing = "${clip.id}${q.suffix}.part"
@@ -434,6 +441,9 @@ class DownloadWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(c
             expected = if (r.code == 206) range?.substringAfter('/', "")?.toLongOrNull() ?: -1
             else r.header("Content-Length")?.toLongOrNull() ?: -1
             if (have > 0 && r.code == 206 && !resumed) throw java.io.IOException("Server resumed at the wrong position; will retry from the start")
+            // For the progress ring: where this file starts and how large it will be.
+            fileHave = if (resumed) have else 0
+            fileTotal = expected
             if (have > 0) AppLog.i(if (resumed) "Resuming ${clip.id} from ${Format.size(have)}" else "Server can't resume ${clip.id}; starting over")
             resolver.openOutputStream(partUri, if (resumed) "wa" else "wt")!!.use { out ->
                 val input = r.body!!.byteStream()

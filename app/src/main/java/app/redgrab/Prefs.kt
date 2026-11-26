@@ -99,6 +99,10 @@ class Prefs(context: Context) : RedditStore {
         set(v) = sp.edit { putBoolean("previewUnsaved", v) }
 
     /** How many previews may play at the same time: 2, 4 or 6, or 0 for everything on screen. */
+    /** Ask which category an online clip goes into when saving it. */
+    var askCategory: Boolean
+        get() = sp.getBoolean("askCategory", true)
+        set(v) = sp.edit { putBoolean("askCategory", v) }
     /** Make and play small preview copies of saved clips (see PreviewMaker). */
     var previewCopies: Boolean
         get() = sp.getBoolean("previewCopies", true)

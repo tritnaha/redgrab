@@ -13,6 +13,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -148,6 +149,12 @@ fun PlayerScreen(vm: MainViewModel, session: PlayerSession) {
     /** A clip from online browsing that isn't in the library (yet). */
     val online = clipId !in byId
     val currentClip by rememberUpdatedState(clip)
+    // Save button: a ring while the clip is being saved, then the "saved" mark for a moment.
+    val saveProgress = vm.saveProgress(clip.id, dl, s)
+    var wasSaving by remember(clip.id) { mutableStateOf(false) }
+    var justSaved by remember(clip.id) { mutableStateOf(false) }
+    LaunchedEffect(clip.id, saveProgress != null) { if (saveProgress != null) wasSaving = true }
+    LaunchedEffect(clip.id, saved) { if (saved && wasSaving) { justSaved = true; delay(1_800); justSaved = false } }
 
     var fullscreen by remember { mutableStateOf(false) }
     var playing by remember { mutableStateOf(true) }
@@ -589,14 +596,10 @@ fun PlayerScreen(vm: MainViewModel, session: PlayerSession) {
                     PillButton(Icons.AutoMirrored.Filled.Send, if (vm.sharing) "Preparing…" else "WhatsApp", RgGreen.copy(alpha = 0.9f)) {
                         vm.shareToWhatsApp(clip)
                     }
-                    if (clip.isImage) {
-                        // Pictures can't be trimmed; one from online can be saved.
-                        if (!saved) PillButton(Icons.Default.Download, if (clip.id in vm.savingImages) "Saving…" else "Save", Color.White.copy(alpha = 0.15f)) {
-                            vm.saveOnline(clip)
-                        }
-                    } else if (saved) PillButton(Icons.Default.ContentCut, "Edit", Color.White.copy(alpha = 0.15f)) { vm.openEditor(clip) }
-                    else PillButton(Icons.Default.Download, if (clip.id in vm.savingImages) "Saving…" else "Save", Color.White.copy(alpha = 0.15f)) {
-                        if (online) vm.saveOnline(clip) else vm.download(clip.id)
+                    // Save → ring with the progress → "Saved". A saved video then offers Edit; pictures can't be trimmed.
+                    if (saved && !justSaved && !clip.isImage) PillButton(Icons.Default.ContentCut, "Edit", Color.White.copy(alpha = 0.15f)) { vm.openEditor(clip) }
+                    else if (!saved || justSaved) SaveButton(saveProgress, saved) {
+                        if (online) vm.saveOnline(clip) else vm.downloadShown(clip.id)
                     }
                     Spacer(Modifier.weight(1f))
                     if (clip.isCopy) {
@@ -618,6 +621,7 @@ fun PlayerScreen(vm: MainViewModel, session: PlayerSession) {
         }
     }
 
+    vm.saveRequest?.let { CategoryDialog(vm, it) }
     if (confirmDelete) {
         androidx.compose.material3.AlertDialog(
             onDismissRequest = { confirmDelete = false },
@@ -643,6 +647,62 @@ private fun QualityChip(q: Quality, saved: Boolean, available: Boolean, download
         if (!saved && available) Icon(Icons.Default.ArrowDownward, null, tint = Color.White,
             modifier = Modifier.size(11.dp).align(Alignment.BottomEnd))
     }
+}
+
+/**
+ * The Save button. [progress]: null = not saving, -1 = saving with no known size (a spinning
+ * ring), 0..1 = how far (the ring fills). [done] = the clip is on the phone.
+ */
+@Composable
+private fun SaveButton(progress: Float?, done: Boolean, onClick: () -> Unit) {
+    val busy = progress != null && !done
+    val shown by androidx.compose.animation.core.animateFloatAsState((progress ?: 0f).coerceIn(0f, 1f), label = "save")
+    Row(
+        Modifier.clip(RoundedCornerShape(50)).background(Color.White.copy(alpha = 0.15f))
+            .clickable(enabled = !busy && !done, onClick = onClick).padding(horizontal = 14.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        androidx.compose.animation.Crossfade(if (done) 2 else if (busy) 1 else 0, label = "save icon") { state ->
+            Box(Modifier.size(18.dp), contentAlignment = Alignment.Center) {
+                when (state) {
+                    2 -> Icon(Icons.Default.CheckCircle, null, tint = RgGreen, modifier = Modifier.size(18.dp))
+                    1 -> if (progress != null && progress >= 0f)
+                        CircularProgressIndicator(progress = { shown }, modifier = Modifier.size(18.dp), color = Color.White,
+                            strokeWidth = 2.dp, trackColor = Color.White.copy(alpha = 0.25f))
+                    else CircularProgressIndicator(Modifier.size(18.dp), color = Color.White, strokeWidth = 2.dp)
+                    else -> Icon(Icons.Default.Download, null, tint = Color.White, modifier = Modifier.size(18.dp))
+                }
+            }
+        }
+        Spacer(Modifier.width(6.dp))
+        Text(when { done -> "Saved"; busy && progress != null && progress >= 0f -> "%d%%".format((shown * 100).toInt()); busy -> "Saving"; else -> "Save" },
+            color = Color.White, fontWeight = FontWeight.Medium, maxLines = 1)
+    }
+}
+
+/** Asked when an online clip is saved: which of your categories it goes into. One tap saves. */
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+@Composable
+private fun CategoryDialog(vm: MainViewModel, request: MainViewModel.SaveRequest) {
+    val categories = remember { vm.categories() }
+    var new by remember { mutableStateOf("") }
+    fun save(category: String) = vm.saveOnline(request.clip, request.quality, category)
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = vm::cancelSave,
+        title = { Text("Save to") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                    androidx.compose.material3.AssistChip(onClick = { save("") }, label = { Text("No category") })
+                    categories.take(24).forEach { c -> androidx.compose.material3.AssistChip(onClick = { save(c) }, label = { Text(c, maxLines = 1) }) }
+                }
+                androidx.compose.material3.OutlinedTextField(new, { new = it.take(40) }, singleLine = true, label = { Text("New category") },
+                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp))
+            }
+        },
+        confirmButton = { androidx.compose.material3.TextButton(enabled = new.isNotBlank(), onClick = { save(new) }) { Text("Save") } },
+        dismissButton = { androidx.compose.material3.TextButton(onClick = vm::cancelSave) { Text("Cancel") } },
+    )
 }
 
 @Composable
