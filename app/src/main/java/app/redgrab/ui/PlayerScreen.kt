@@ -91,6 +91,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
@@ -174,6 +175,9 @@ fun PlayerScreen(vm: MainViewModel, session: PlayerSession) {
     var boxSize by remember { mutableStateOf(IntSize.Zero) }
     /** Where on the screen the clip may be drawn (the screen less a margin, unless it fills the screen). */
     var frame by remember { mutableStateOf(androidx.compose.ui.geometry.Rect.Zero) }
+    /** Heights of the bar above and the panel below, so the clip sits between them and leaves background to tap. */
+    var topBar by remember { mutableStateOf(0) }
+    var bottomPanel by remember { mutableStateOf(0) }
 
     val ua = remember { vm.library.prefs.userAgent ?: runCatching { WebSettings.getDefaultUserAgent(ctx) }.getOrDefault("Mozilla/5.0") }
     // Saved files: read straight from the phone. Unsaved clips: stream through a local cache.
@@ -357,7 +361,18 @@ fun PlayerScreen(vm: MainViewModel, session: PlayerSession) {
       // The clip's frame: the whole screen when it fills it, otherwise inset so the grid shows around it.
       Box(
         (if (cover) Modifier.fillMaxSize()
-        else Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing).padding(horizontal = 16.dp, vertical = 56.dp))
+        else {
+            // Between the bar above and the panel below (neither passes taps on), and clear of both sides,
+            // so there is always background left to tap: at least a tenth of the width on each side.
+            val d = LocalDensity.current
+            val side = with(d) { maxOf(40.dp, (boxSize.width * 0.10f).toDp()) }
+            val gap = 16.dp
+            val room = with(d) { (boxSize.height * 0.42f).toDp() } // the panel never takes more than this from the clip
+            val top = if (fullscreen || topBar == 0) 56.dp else with(d) { topBar.toDp() } + gap
+            val bottom = if (fullscreen || bottomPanel == 0) 56.dp else minOf(with(d) { bottomPanel.toDp() }, room) + gap
+            (if (fullscreen) Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing) else Modifier.fillMaxSize())
+                .padding(start = side, end = side, top = top, bottom = bottom)
+        })
             .onGloballyPositioned { frame = it.boundsInParent() }
       ) {
         AndroidView(
@@ -465,6 +480,7 @@ fun PlayerScreen(vm: MainViewModel, session: PlayerSession) {
                     .background(Brush.verticalGradient(listOf(Color.Black.copy(alpha = 0.7f), Color.Transparent)))
                     // Clear of the camera cut-out now that the status bar is hidden. Taps on the bar itself do nothing.
                     .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal))
+                    .onSizeChanged { topBar = it.height }
                     .pointerInput(Unit) { detectTapGestures { } }
                     .padding(horizontal = 4.dp, vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -488,6 +504,7 @@ fun PlayerScreen(vm: MainViewModel, session: PlayerSession) {
             Column(
                 Modifier.align(Alignment.BottomCenter).fillMaxWidth()
                     .background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.85f))))
+                    .onSizeChanged { bottomPanel = it.height }
                     .navigationBarsPadding().pointerInput(Unit) { detectTapGestures { } }.padding(horizontal = 16.dp, vertical = 8.dp),
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -553,12 +570,13 @@ fun PlayerScreen(vm: MainViewModel, session: PlayerSession) {
                 s.failures[clip.id]?.let { f ->
                     Row(Modifier.padding(bottom = 6.dp).clip(RoundedCornerShape(10.dp)).background(Color.Black.copy(alpha = 0.5f)).padding(start = 10.dp),
                         verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.ErrorOutline, null, tint = RgAmber, modifier = Modifier.size(18.dp))
+                        Icon(Icons.Default.ErrorOutline, null, tint = if (f.dead) Color.White.copy(alpha = 0.7f) else RgAmber, modifier = Modifier.size(18.dp))
                         Spacer(Modifier.width(8.dp))
-                        Text("Download failed: ${f.reason}" + (if (f.attempts > 1) " (${f.attempts} tries)" else "") +
-                            (if (f.gaveUp) ". No more automatic retries." else ""),
+                        Text(if (f.dead) "${f.reason}. Not downloaded again."
+                            else "Download failed: ${f.reason}" + (if (f.attempts > 1) " (${f.attempts} tries)" else "") +
+                                (if (f.gaveUp) ". No more automatic retries." else ""),
                             color = Color.White, fontSize = 12.sp, modifier = Modifier.weight(1f))
-                        androidx.compose.material3.TextButton(onClick = { vm.retryFailed(listOf(clip.id)) }) { Text("Retry") }
+                        androidx.compose.material3.TextButton(onClick = { vm.retryFailed(listOf(clip.id)) }) { Text(if (f.dead) "Check again" else "Retry") }
                     }
                 }
                 // Where it's playing from and which qualities are saved (tap a missing one to save it).

@@ -157,9 +157,11 @@ data class EditCopy(val id: String, val originalId: String, val file: String, va
  * A download that didn't work, kept until it succeeds or you delete the clip.
  * [attempts] counts whole runs (each run already retries three times); [first] is when it first failed.
  */
-data class Failure(val reason: String, val first: Long, val last: Long, val attempts: Int) {
-    /** After this many failed runs, or this long, automatic retries stop; you can still retry by hand. */
-    val gaveUp get() = attempts >= MAX_ATTEMPTS || last - first > MAX_AGE_MS
+data class Failure(val reason: String, val first: Long, val last: Long, val attempts: Int,
+                   /** The site says the clip no longer exists: never retried automatically and not counted as a failed download. */
+                   val dead: Boolean = false) {
+    /** After this many failed runs, or this long, automatic retries stop; you can still retry by hand. A dead clip is never retried. */
+    val gaveUp get() = dead || attempts >= MAX_ATTEMPTS || last - first > MAX_AGE_MS
     fun toJson() = JSONObject().put("reason", reason).put("first", first).put("last", last).put("attempts", attempts)
     companion object {
         const val MAX_ATTEMPTS = 5
@@ -226,7 +228,10 @@ data class LibraryState(
     /** Clips that arrived in a sync and haven't been opened yet. */
     val unseen: Set<String> = emptySet(),
 ) {
-    val failed: Set<String> get() = failures.keys
+    /** Downloads that failed and may still work. */
+    val failed: Set<String> by lazy { failures.filterValues { !it.dead }.keys }
+    /** Clips the site no longer has (deleted there): listed, but never downloaded again. */
+    val dead: Set<String> by lazy { failures.filterValues { it.dead }.keys }
 
     /** IDs with at least one saved file. Edited copies always count as saved. */
     val saved: Set<String> by lazy { qualities.filterValues { it.isNotEmpty() }.keys + clips.filter { it.isCopy || it.imported }.map { it.id } }
@@ -289,7 +294,7 @@ class Library(private val ctx: Context) {
             fileIndex = store.files().associate { it.name to (it.size to it.sha) }
             _state.value = LibraryState(
                 clips = compose(), qualities = readHistory(), lastSynced = prefs.lastSynced,
-                failures = store.failures().associate { it.id to Failure(it.reason, it.firstAt, it.lastAt, it.attempts) },
+                failures = store.failures().associate { it.id to Failure(it.reason, it.firstAt, it.lastAt, it.attempts, it.dead) },
                 history = store.syncs().map { SyncRecord(it.time, it.total, it.added, it.removed, it.saved) },
                 performers = store.performers().associate { it.key to it.toPerformer() },
                 hidden = hidden,
@@ -625,11 +630,11 @@ class Library(private val ctx: Context) {
     }
 
     /** Records a failed download with a plain-language reason. */
-    fun markFailed(id: String, reason: String) = synchronized(lock) {
+    fun markFailed(id: String, reason: String, dead: Boolean = false) = synchronized(lock) {
         val now = System.currentTimeMillis()
         val old = _state.value.failures[id]
-        val f = Failure(reason, old?.first ?: now, now, (old?.attempts ?: 0) + 1)
-        store.putFailures(listOf(FailureRow(id, f.reason, f.first, f.last, f.attempts)))
+        val f = Failure(reason, old?.first ?: now, now, (old?.attempts ?: 0) + 1, dead)
+        store.putFailures(listOf(FailureRow(id, f.reason, f.first, f.last, f.attempts, f.dead)))
         _state.update { it.copy(failures = it.failures + (id to f)) }
     }
 

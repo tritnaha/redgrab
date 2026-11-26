@@ -325,7 +325,7 @@ object BugReport {
             "RedGifs" to Session.describe(prefs),
             "Reddit" to (if (prefs.redditRefresh != null) "signed in" else if (prefs.redditClientId != null) "client ID set" else "not set up"),
             "Save folder" to (if (prefs.folderUri != null) "chosen" else "none"),
-            "Library" to "${s.originals.size} clips, ${s.savedCount} saved, ${s.failures.size} failed, ${s.collections.size} collections, ${s.likedTotal} liked",
+            "Library" to "${s.originals.size} clips, ${s.savedCount} saved, ${s.failed.size} failed, ${s.dead.size} removed, ${s.collections.size} collections, ${s.likedTotal} liked",
             "Online source" to (prefs.onlineSource ?: "RedGifs"),
             "Layout" to "${if (prefs.wall) "wall" else "grid"}, ${prefs.columns} per row; previews ${if (prefs.previews) "on" else "off"}" +
                 " (${if (prefs.previewCount == 0) "all" else prefs.previewCount.toString()}), unsaved ${if (prefs.previewUnsaved) "on" else "off"}, copies ${if (prefs.previewCopies) "on" else "off"} (${s.localPreviews.size}); fill screen ${if (prefs.playerFill) "on" else "off"}",

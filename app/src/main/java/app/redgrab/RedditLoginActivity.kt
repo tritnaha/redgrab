@@ -59,6 +59,9 @@ class RedditLoginActivity : ComponentActivity() {
     private var busy by mutableStateOf(false)
     private var message by mutableStateOf<String?>(null)
 
+    /** Locked while this screen was out of sight: back to the main screen, which asks you to unlock. */
+    override fun onStart() { super.onStart(); if (AppLock.locked) finish() }
+
     @OptIn(ExperimentalMaterial3Api::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
@@ -151,6 +154,8 @@ class RedditLoginActivity : ComponentActivity() {
             busy = false
             r.onSuccess { name ->
                 AppLog.i("Signed in to Reddit" + if (name.isNotEmpty()) " as $name" else "")
+                // The token is all the app needs from here on; Reddit's web sign-in isn't kept.
+                forgetCookies("reddit.com", listOf("https://www.reddit.com/", "https://reddit.com/", "https://old.reddit.com/", "https://accounts.reddit.com/"))
                 setResult(RESULT_OK)
                 finish()
             }.onFailure { e ->
@@ -165,5 +170,22 @@ class RedditLoginActivity : ComponentActivity() {
         web?.destroy()
         web = null
         super.onDestroy()
+    }
+
+    /**
+     * Removes one site's cookies from the app's built-in browser, leaving other sites' alone
+     * (RedGifs' are needed to renew its session).
+     */
+    private fun forgetCookies(domain: String, urls: List<String>) = runCatching {
+        val cm = CookieManager.getInstance()
+        for (url in urls) {
+            val names = cm.getCookie(url)?.split(';')?.mapNotNull { it.substringBefore('=').trim().takeIf(String::isNotEmpty) } ?: continue
+            for (n in names) {
+                // A cookie is replaced only by one with the same scope, so both common scopes are cleared.
+                cm.setCookie(url, "$n=; Max-Age=0; Path=/; Secure")
+                cm.setCookie(url, "$n=; Max-Age=0; Path=/; Domain=.$domain; Secure")
+            }
+        }
+        cm.flush()
     }
 }

@@ -40,6 +40,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.LinkOff
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.DoneAll
@@ -340,7 +341,7 @@ fun LibraryScreen(vm: MainViewModel, snack: SnackbarHostState, onSignIn: () -> U
                     }
                 }
                 if (dlRunning || dlHasMessage) {
-                    item(span = StaggeredGridItemSpan.FullLine) { Box(head) { DownloadCard(dlState.value, s.failures.size, vm) } }
+                    item(span = StaggeredGridItemSpan.FullLine) { Box(head) { DownloadCard(dlState.value, s.failed.size, vm) } }
                 }
                 if (s.clips.isNotEmpty()) {
                     item(span = StaggeredGridItemSpan.FullLine) {
@@ -402,10 +403,15 @@ fun LibraryScreen(vm: MainViewModel, snack: SnackbarHostState, onSignIn: () -> U
                                 if (s.unseen.isNotEmpty()) FilterChip(vm.filter == Filter.Unseen,
                                     { vm.filter = if (vm.filter == Filter.Unseen) Filter.Saved else Filter.Unseen },
                                     { Text("New · %,d".format(s.unseen.size)) })
-                                if (s.failures.isNotEmpty()) FilterChip(vm.filter == Filter.Failed,
+                                if (s.failed.isNotEmpty()) FilterChip(vm.filter == Filter.Failed,
                                     { vm.filter = if (vm.filter == Filter.Failed) Filter.Saved else Filter.Failed },
-                                    { Text("Failed · %,d".format(s.failures.size)) },
+                                    { Text("Failed · %,d".format(s.failed.size)) },
                                     leadingIcon = { Icon(Icons.Default.ErrorOutline, null, Modifier.size(16.dp), tint = RgAmber) })
+                                // Clips the site has deleted: kept in the list, never downloaded again.
+                                if (s.dead.isNotEmpty()) FilterChip(vm.filter == Filter.Dead,
+                                    { vm.filter = if (vm.filter == Filter.Dead) Filter.Saved else Filter.Dead },
+                                    { Text("Removed · %,d".format(s.dead.size)) },
+                                    leadingIcon = { Icon(Icons.Default.LinkOff, null, Modifier.size(16.dp)) })
                             }
                         }
                     }
@@ -419,9 +425,18 @@ fun LibraryScreen(vm: MainViewModel, snack: SnackbarHostState, onSignIn: () -> U
                         }
                     }
                 }
-                if (vm.filter == Filter.Failed && s.failures.isNotEmpty()) {
+                if (vm.filter == Filter.Dead && s.dead.isNotEmpty()) {
                     item(span = StaggeredGridItemSpan.FullLine) {
-                        val gaveUp = s.failures.values.count { it.gaveUp }
+                        Row(verticalAlignment = Alignment.CenterVertically, modifier = head.fillMaxWidth().padding(vertical = 2.dp)) {
+                            Text("Deleted on the site. Not downloaded again.", Modifier.weight(1f),
+                                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            TextButton(onClick = { vm.retryFailed(s.dead) }) { Text("Check again") }
+                        }
+                    }
+                }
+                if (vm.filter == Filter.Failed && s.failed.isNotEmpty()) {
+                    item(span = StaggeredGridItemSpan.FullLine) {
+                        val gaveUp = s.failures.values.count { it.gaveUp && !it.dead }
                         Row(verticalAlignment = Alignment.CenterVertically, modifier = head.fillMaxWidth().padding(vertical = 2.dp)) {
                             Text("Open a clip to see why it failed." + if (gaveUp > 0) " $gaveUp stopped retrying automatically (after ${app.redgrab.Failure.MAX_ATTEMPTS} runs or 7 days)." else " They're retried automatically on the next save.",
                                 Modifier.weight(1f), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -443,6 +458,7 @@ fun LibraryScreen(vm: MainViewModel, snack: SnackbarHostState, onSignIn: () -> U
                         partial = clip.id in s.partial,
                         sfw = vm.sfw,
                         failed = clip.id in s.failed,
+                        dead = clip.id in s.dead,
                         downloading = dlRunning && dlCurrent == clip.id,
                         selected = clip.id in vm.selection,
                         selecting = selecting,
@@ -589,7 +605,7 @@ private fun DownloadCard(p: DownloadProgress, failedCount: Int, vm: MainViewMode
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun ClipTile(
-    clip: Clip, unseen: Boolean, thumb: Any?, wall: Boolean, corner: Dp, compact: Boolean, preview: (@Composable () -> Unit)?, saved: Boolean, qualities: Set<Quality>, partial: Boolean, sfw: Boolean, failed: Boolean, downloading: Boolean,
+    clip: Clip, unseen: Boolean, thumb: Any?, wall: Boolean, corner: Dp, compact: Boolean, preview: (@Composable () -> Unit)?, saved: Boolean, qualities: Set<Quality>, partial: Boolean, sfw: Boolean, failed: Boolean, dead: Boolean = false, downloading: Boolean,
     selected: Boolean, selecting: Boolean, onClick: () -> Unit, onLongClick: () -> Unit,
 ) {
     val haptic = LocalHapticFeedback.current
@@ -645,6 +661,7 @@ private fun ClipTile(
                 clip.isCopy -> TileLabel(if (compact) "E" else "EDIT", RgPurple)
                 partial && !saved -> Icon(Icons.Default.Downloading, "Partly downloaded; resumes next time", tint = RgAmber,
                     modifier = Modifier.size(20.dp))
+                dead && !saved -> Icon(Icons.Default.LinkOff, "Removed from the site", tint = Color.White.copy(alpha = 0.8f), modifier = Modifier.size(20.dp))
                 failed && !saved -> Icon(Icons.Default.ErrorOutline, "Failed", tint = RgAmber, modifier = Modifier.size(20.dp))
                 else -> Row(verticalAlignment = Alignment.CenterVertically) {
                     // Saved quality as plain icons (hidden when previews are very small).

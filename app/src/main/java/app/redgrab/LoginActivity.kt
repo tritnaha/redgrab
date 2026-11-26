@@ -74,6 +74,9 @@ class LoginActivity : ComponentActivity() {
     }
     private var web: WebView? = null
 
+    /** Locked while this screen was out of sight: back to the main screen, which asks you to unlock. */
+    override fun onStart() { super.onStart(); if (AppLock.locked) finish() }
+
     @OptIn(ExperimentalMaterial3Api::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()

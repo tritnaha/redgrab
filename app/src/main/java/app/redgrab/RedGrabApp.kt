@@ -39,6 +39,7 @@ class RedGrabApp : Application(), SingletonImageLoader.Factory {
         super.onCreate()
         AppLog.init(this)
         library = Library(this)
+        AppLock.install(this, library.prefs)
         runCatching { SyncWorker.schedule(this) }
         runCatching { UpdateWorker.schedule(this) }
         // Remove leftover WhatsApp share copies from earlier sessions.

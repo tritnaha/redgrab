@@ -47,6 +47,9 @@ class VerifyActivity : ComponentActivity() {
     private var status by mutableStateOf("Solve the check below to continue.")
     private var busy by mutableStateOf(false)
 
+    /** Locked while this screen was out of sight: back to the main screen, which asks you to unlock. */
+    override fun onStart() { super.onStart(); if (AppLock.locked) finish() }
+
     @OptIn(ExperimentalMaterial3Api::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()

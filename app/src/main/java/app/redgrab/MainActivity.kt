@@ -89,6 +89,13 @@ class MainActivity : ComponentActivity() {
         if (it.resultCode == RESULT_OK) vm.refresh()
     }
 
+    private val confirmLock = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+        AppLock.legacyResult(it.resultCode == RESULT_OK)
+    }
+    /** Android's unlock prompt (fingerprint, face, PIN, pattern or password, whatever the phone has). */
+    private fun askIdentity(title: String, onResult: (Boolean) -> Unit = {}) =
+        AppLock.ask(this, title, legacy = { confirmLock.launch(it) }, onResult = onResult)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         installSplashScreen()
         enableEdgeToEdge()
@@ -145,7 +152,9 @@ class MainActivity : ComponentActivity() {
                     NavItem(4, "Online", Icons.Default.Public),
                     NavItem(3, "Settings", Icons.Default.Settings, badge = hasNewErrors),
                 )
-                CompositionLocalProvider(LocalChrome provides chrome, LocalNavPad provides navPad) {
+                LaunchedEffect(vm.appLock) { AppLock.settingChanged(this@MainActivity, vm.appLock) }
+                CompositionLocalProvider(LocalChrome provides chrome, LocalNavPad provides navPad,
+                    app.redgrab.ui.LocalConfirmIdentity provides { title, done -> askIdentity(title, done) }) {
                     Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
                         Box(Modifier.fillMaxSize().padding(bottom = if (gridTab) 0.dp else navPad).consumeWindowInsets(WindowInsets.navigationBars)) {
                             when (tab) {
@@ -184,6 +193,9 @@ class MainActivity : ComponentActivity() {
                     )
                 }
 
+                // Last, so it lies over everything else, dialogs included.
+                if (AppLock.locked) app.redgrab.ui.LockScreen(AppLock.asking, onUnlock = { askIdentity("Unlock RedGrab") }, onLeave = { moveTaskToBack(true) })
+
                 vm.lastCrash?.let { crash ->
                     AlertDialog(
                         onDismissRequest = vm::dismissCrash,
@@ -215,6 +227,8 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        // Locked: the unlock prompt comes up by itself once; after a cancel, the Unlock button brings it back.
+        if (AppLock.takeAutoAsk()) askIdentity("Unlock RedGrab")
         vm.onResume()
     }
 

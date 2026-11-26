@@ -24,6 +24,9 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 
 /** Downloads the queued clip IDs into the save folder, in the background. */
+/** The site says the clip no longer exists (deleted by its uploader or the site). */
+class GoneException(site: String) : java.io.IOException("No longer on $site")
+
 class DownloadWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, params) {
 
     companion object {
@@ -130,6 +133,7 @@ class DownloadWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(c
 
         /** Plain-language reason shown next to a failed clip. [site]: where the clip is from. */
         fun reasonFor(e: Throwable, site: String = "RedGifs"): String = when {
+            e is GoneException -> e.message ?: "No longer on $site"
             e is HttpException && e.code == 404 -> "Not found on $site (it may have been removed)"
             e is HttpException && e.code == 410 -> "Removed from $site"
             e is HttpException && e.code == 403 -> "$site refused the download (HTTP 403)"
@@ -149,6 +153,7 @@ class DownloadWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(c
 
     private val lib = ctx.library
     private var lastNotify = 0L
+    private fun isGone(code: Int) = code == 404 || code == 410
 
     override suspend fun getForegroundInfo(): ForegroundInfo = foreground(lib.download.value)
 
@@ -213,6 +218,7 @@ class DownloadWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(c
 
         var runBytes = 0L
         var finishedOk = 0
+        var gone = 0
         var speed = 0.0
         var windowStart = SystemClock.elapsedRealtime()
         var windowBytes = 0L
@@ -265,9 +271,16 @@ class DownloadWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(c
                         AppLog.w("Connection lost during ${clip.id}; the run will continue when it's back")
                         break
                     }
-                    AppLog.e("Failed to save ${clip.id}: ${e.message}", e.takeUnless { it is HttpException || isNetworkError(it) })
-                    lib.markFailed(clip.id, reasonFor(e, OnlineSource.of(clip.id).label))
-                    progress = progress.copy(failed = progress.failed + 1)
+                    if (e is GoneException) {
+                        // Deleted on the site: remembered as such, never retried, and not reported as a failed download.
+                        AppLog.w("${clip.id}: ${e.message}; marked as removed and not tried again")
+                        lib.markFailed(clip.id, reasonFor(e), dead = true)
+                        gone++
+                    } else {
+                        AppLog.e("Failed to save ${clip.id}: ${e.message}", e.takeUnless { it is HttpException || isNetworkError(it) })
+                        lib.markFailed(clip.id, reasonFor(e, OnlineSource.of(clip.id).label))
+                        progress = progress.copy(failed = progress.failed + 1)
+                    }
                 }
                 progress = progress.copy(done = i + 1)
             }
@@ -324,10 +337,11 @@ class DownloadWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(c
             stoppedForAuth -> "Session expired. Sign in again, then continue."
             progress.failed > 0 -> "Saved $finishedOk clips, ${progress.failed} failed. Open the Failed filter to see why and retry."
             else -> "Saved $finishedOk clips."
-        }
+        } + if (gone > 0 && needsCheck == null && !stoppedForAuth) " $gone no longer exist." else ""
         AppLog.i("Download finished: $msg (${Format.size(runBytes)})")
         lib.updateDownload { progress.copy(running = false, currentId = null, etaSec = -1, message = msg) }
-        notifyDone(msg)
+        // A run that only found deleted clips has nothing worth a notification.
+        if (finishedOk > 0 || progress.failed > 0 || stoppedForAuth || needsCheck != null || gone == 0) notifyDone(msg)
         if (stoppedForAuth || needsCheck != null) Result.failure() else Result.success()
     }
 
@@ -348,7 +362,7 @@ class DownloadWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(c
                 save(http, api, folder, clip, q, onBytes)
                 return
             } catch (e: java.io.IOException) {
-                val permanent = e is AuthException || e is VerificationRequiredException || e is HlsSaver.Unsupported ||
+                val permanent = e is AuthException || e is VerificationRequiredException || e is HlsSaver.Unsupported || e is GoneException ||
                     (e is HttpException && e.code in 400..499 && e.code != 408 && e.code != 429)
                 if (permanent || attempt >= 2) {
                     // Nothing was downloaded at all: don't leave an empty partial file lying around.
@@ -390,12 +404,24 @@ class DownloadWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(c
         var have = if (existingUri != null) DocumentFile.fromSingleUri(applicationContext, partUri)?.length() ?: 0L else 0L
 
         /** A fresh copy of the clip from its own site (new media addresses), where the site offers that. */
-        suspend fun fresh(): Clip? = when (OnlineSource.of(clip.id)) {
-            // The session may have run out during a long run; it is renewed out of sight when needed.
-            OnlineSource.RedGifs -> if (api == null) null else withRedGifs(applicationContext) { it.clip(clip.id) }
-            OnlineSource.FikFap -> FikFapApi(http).post(clip.id.removePrefix(OnlineSource.FikFap.prefix))
-            else -> null
+        val site = OnlineSource.of(clip.id)
+        suspend fun fresh(): Clip? = try {
+            when (site) {
+                // The session may have run out during a long run; it is renewed out of sight when needed.
+                OnlineSource.RedGifs -> if (api == null) null else withRedGifs(applicationContext) { it.clip(clip.id) }
+                OnlineSource.FikFap -> FikFapApi(http).post(clip.id.removePrefix(OnlineSource.FikFap.prefix))
+                else -> null
+            }
+        } catch (e: HttpException) {
+            // The site itself says the clip is gone (not just its old file address).
+            if (isGone(e.code)) throw GoneException(site.label) else throw e
         }?.also { lib.replaceClip(it) }
+        /** A site that can't be asked again: a file that is "not found" there has been deleted. */
+        suspend fun freshOrGone(e: HttpException): Clip {
+            val c = fresh()
+            if (c == null && isGone(e.code) && site != OnlineSource.RedGifs && site != OnlineSource.FikFap) throw GoneException(site.label)
+            return c ?: throw e
+        }
 
         val firstUrl = clip.url(q) ?: error("No ${q.label} video URL")
         if (HlsSaver.isHls(firstUrl)) {
@@ -427,7 +453,7 @@ class DownloadWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(c
                 }
                 e.code in setOf(403, 404, 410) -> {
                     AppLog.w("Media URL for ${clip.id} expired (HTTP ${e.code}); fetching a fresh one")
-                    open(fresh()?.url(q) ?: throw e)
+                    open(freshOrGone(e).url(q) ?: throw e)
                 }
                 else -> throw e
             }

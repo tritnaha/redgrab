@@ -195,7 +195,8 @@ private fun CollectionsList(vm: MainViewModel, s: app.redgrab.LibraryState, onOp
         items(rows, key = { it.key }) { r ->
             val saved = r.clips.count { it.id in s.saved }
             val watched = r.key in s.watched
-            val failed = r.clips.count { it.id in s.failures && it.id !in s.saved }
+            val failed = r.clips.count { it.id in s.failed && it.id !in s.saved }
+            val dead = r.clips.count { it.id in s.dead && it.id !in s.saved }
             Row(
                 Modifier.fillMaxWidth().clickable { vm.openCollection(r.key); onOpen() }.padding(horizontal = 16.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -216,10 +217,11 @@ private fun CollectionsList(vm: MainViewModel, s: app.redgrab.LibraryState, onOp
                     Text(
                         "%,d clips · %,d saved".format(r.clips.size, saved) + when {
                             failed > 0 -> " · %,d failed".format(failed)
-                            watched && saved < r.clips.size -> " · syncing"
+                            // Deleted clips can't be saved: the collection is in sync once the rest is.
+                            watched && saved + dead < r.clips.size -> " · syncing"
                             watched -> " · in sync"
                             else -> ""
-                        },
+                        } + if (dead > 0) " · %,d removed".format(dead) else "",
                         style = MaterialTheme.typography.bodySmall,
                         color = when { failed > 0 -> RgAmber; watched -> RgGreen; else -> MaterialTheme.colorScheme.onSurfaceVariant },
                     )

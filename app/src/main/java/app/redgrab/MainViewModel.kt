@@ -19,7 +19,7 @@ import java.net.UnknownHostException
 import javax.net.ssl.SSLException
 
 /** What to show by state. New = not on the phone yet; Unseen = arrived in a sync and not opened yet. */
-enum class Filter { All, New, Saved, HD, SD, Edited, Failed, Unseen }
+enum class Filter { All, New, Saved, HD, SD, Edited, Failed, Dead, Unseen }
 
 /** Where a clip comes from. */
 enum class Origin(val label: String) {
@@ -83,7 +83,8 @@ fun visibleClips(s: LibraryState, filter: Filter, query: String, facet: Facet?, 
             Filter.HD -> Quality.HD in q
             Filter.SD -> Quality.SD in q
             Filter.Edited -> c.isCopy || c.metaEdited
-            Filter.Failed -> c.id in s.failures
+            Filter.Failed -> c.id in s.failed
+            Filter.Dead -> c.id in s.dead
             Filter.Unseen -> c.id in s.unseen
         } &&
             origin.matches(s, c) &&
@@ -106,6 +107,14 @@ fun visibleClips(s: LibraryState, filter: Filter, query: String, facet: Facet?, 
         }
     }
 }
+
+/**
+ * Whether the last sync is recent enough that opening the app shouldn't sync again: the library on
+ * the phone is shown as it is. [maxAgeHours] 0 = never fresh (sync every time). A clock set back
+ * (a sync "in the future") doesn't count as fresh.
+ */
+fun syncIsFresh(lastSynced: Long, maxAgeHours: Int, now: Long = System.currentTimeMillis()): Boolean =
+    maxAgeHours > 0 && lastSynced in 1..now && now - lastSynced < maxAgeHours * 3_600_000L
 
 /** What the delete screen is asking about. */
 data class DeleteRequest(val originals: List<Clip>, val copies: List<Clip>, val selectedCopies: Set<String>)
@@ -349,7 +358,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * grid (player, editor, delete screen), and the phone isn't in battery saver.
      */
     val previewsActive: Boolean
-        get() = previews && !sfw && player == null && editing == null && deleteRequest == null && !powerSave()
+        get() = previews && !sfw && player == null && editing == null && deleteRequest == null && !AppLock.locked && !powerSave()
 
     private fun powerSave(): Boolean =
         getApplication<Application>().getSystemService(android.os.PowerManager::class.java)?.isPowerSaveMode == true
@@ -439,7 +448,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // and make sure every saved clip has a thumbnail stored on the phone.
         rescanFolder()
         lookForUpdate()
-        if (!startupRefreshDone && prefs.refreshOnStart && prefs.signedIn) {
+        if (!startupRefreshDone && prefs.refreshOnStart && prefs.signedIn && !syncIsFresh(prefs.lastSynced, prefs.startSyncHours)) {
             startupRefreshDone = true
             // Offline at launch is normal, not an error: just show what's on the phone.
             if (isOnline()) refresh(quiet = true) else offline = true
@@ -624,7 +633,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** Tries the failed downloads again, with a fresh set of attempts. */
-    fun retryFailed(ids: kotlin.collections.Collection<String> = state.value.failures.keys) {
+    fun retryFailed(ids: kotlin.collections.Collection<String> = state.value.failed) {
         val list = ids.filter { it !in state.value.saved }
         if (list.isEmpty()) return say("Nothing to retry.")
         viewModelScope.launch(Dispatchers.IO) {
@@ -1296,7 +1305,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun changeHd(v: Boolean) { prefs.hd = v; hd = v }
     fun changeIncludeCollections(v: Boolean) { prefs.includeCollections = v; includeCollections = v }
+    var appLock by mutableStateOf(prefs.appLock)
+        private set
+    var appLockAfterSec by mutableStateOf(prefs.appLockAfterSec)
+        private set
+    fun changeAppLock(v: Boolean) { prefs.appLock = v; appLock = v; AppLog.i(if (v) "App lock on" else "App lock off") }
+    fun changeAppLockAfter(sec: Int) { prefs.appLockAfterSec = sec; appLockAfterSec = prefs.appLockAfterSec }
     fun changeRefreshOnStart(v: Boolean) { prefs.refreshOnStart = v; refreshOnStart = v }
+    var startSyncHours by mutableStateOf(prefs.startSyncHours)
+        private set
+    fun changeStartSyncHours(v: Int) { prefs.startSyncHours = v; startSyncHours = prefs.startSyncHours }
 
     fun signOut() {
         prefs.signOut()

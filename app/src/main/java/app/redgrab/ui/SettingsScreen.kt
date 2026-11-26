@@ -74,6 +74,8 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.material.icons.filled.Category
 import androidx.compose.material.icons.filled.Compress
+import app.redgrab.AppLock
+import androidx.compose.material.icons.filled.Lock
 import app.redgrab.Format
 import app.redgrab.PreviewMaker
 import app.redgrab.MainViewModel
@@ -171,6 +173,21 @@ fun SettingsScreen(vm: MainViewModel, onSignIn: () -> Unit, onOpenLog: () -> Uni
             }
 
             Section("Privacy") {
+                val canLock = remember { AppLock.available(ctx) }
+                val confirm = LocalConfirmIdentity.current
+                SwitchRow(Icons.Default.Lock, "App lock",
+                    if (canLock) "Unlock with the phone's fingerprint, face, PIN, pattern or password." else "Set a screen lock on the phone first.",
+                    vm.appLock, enabled = canLock || vm.appLock,
+                    // Switching it on or off asks you to unlock first, which also shows the prompt works on this phone.
+                    onChange = { on -> confirm(if (on) "Turn on app lock" else "Turn off app lock") { ok -> if (ok) vm.changeAppLock(on) } })
+                if (vm.appLock) {
+                    Text("Lock after", fontWeight = FontWeight.Medium, modifier = Modifier.padding(start = 16.dp, top = 4.dp))
+                    SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
+                        listOf(0 to "At once", 60 to "1 min", 300 to "5 min", 900 to "15 min").forEachIndexed { i, (sec, label) ->
+                            SegmentedButton(vm.appLockAfterSec == sec, { vm.changeAppLockAfter(sec) }, SegmentedButtonDefaults.itemShape(i, 4)) { Text(label) }
+                        }
+                    }
+                }
                 SwitchRow(Icons.Default.VisibilityOff, "SFW mode",
                     "Blurs every preview, blocks playback and mutes sound. Also pauses online browsing. The eye icon on the Saved tab toggles it too.",
                     vm.sfw, onChange = vm::changeSfw)
@@ -280,6 +297,14 @@ fun SettingsScreen(vm: MainViewModel, onSignIn: () -> Unit, onOpenLog: () -> Uni
                 SwitchRow(Icons.Default.Sync, "Sync when the app opens",
                     "Last synced: ${Format.ago(s.lastSynced)}. Pull down on the Saved tab to sync any time.",
                     vm.refreshOnStart, onChange = vm::changeRefreshOnStart)
+                if (vm.refreshOnStart) {
+                    Text("Only if the last sync is older than", fontWeight = FontWeight.Medium, modifier = Modifier.padding(start = 16.dp, top = 4.dp))
+                    SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
+                        listOf(0, 1, 6, 24).forEachIndexed { i, h ->
+                            SegmentedButton(vm.startSyncHours == h, { vm.changeStartSyncHours(h) }, SegmentedButtonDefaults.itemShape(i, 4)) { Text(if (h == 0) "Always" else "$h h") }
+                        }
+                    }
+                }
                 ListItem(
                     colors = ListItemDefaults.colors(containerColor = Color.Transparent),
                     leadingContent = { Icon(Icons.Default.History, null) },

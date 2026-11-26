@@ -7,9 +7,17 @@ import androidx.core.content.edit
 class Prefs(context: Context) : RedditStore {
     private val sp = context.getSharedPreferences("redgrab", Context.MODE_PRIVATE)
 
+    /** Sign-in secrets are kept encrypted, apart from the ordinary settings. */
+    private val secrets = SecretStore.open(context).also { s ->
+        // Versions before 13.5 kept them with the settings: move them over once.
+        val moved = s.adopt(sp, SECRET_NAMES)
+        if (moved > 0) AppLog.i("Moved $moved stored sign-in(s) into encrypted storage")
+    }
+
+    /** The RedGifs session token. */
     var token: String?
-        get() = sp.getString("token", null)
-        set(v) = sp.edit { putString("token", v) }
+        get() = secrets["token"]
+        set(v) { secrets["token"] = v }
 
     /** User agent of the WebView the token came from; all requests reuse it. */
     var userAgent: String?
@@ -37,6 +45,11 @@ class Prefs(context: Context) : RedditStore {
     var refreshOnStart: Boolean
         get() = sp.getBoolean("refreshOnStart", true)
         set(v) = sp.edit { putBoolean("refreshOnStart", v) }
+
+    /** Opening the app syncs only when the last sync is older than this many hours; 0 = every time. */
+    var startSyncHours: Int
+        get() = sp.getInt("startSyncHours", 6)
+        set(v) = sp.edit { putInt("startSyncHours", v.coerceIn(0, 168)) }
 
     /** Start clips muted in the player. */
     var playMuted: Boolean
@@ -155,8 +168,8 @@ class Prefs(context: Context) : RedditStore {
 
     /** Short-lived access token (the user's, or an app-only one when not signed in). */
     override var redditAccess: String?
-        get() = sp.getString("redditAccess", null)
-        set(v) = sp.edit { putString("redditAccess", v) }
+        get() = secrets["redditAccess"]
+        set(v) { secrets["redditAccess"] = v }
 
     /** When [redditAccess] stops working, epoch seconds. */
     override var redditAccessExp: Long
@@ -165,21 +178,24 @@ class Prefs(context: Context) : RedditStore {
 
     /** Lasting token from signing in; null = not signed in to Reddit. */
     override var redditRefresh: String?
-        get() = sp.getString("redditRefresh", null)
-        set(v) = sp.edit { putString("redditRefresh", v) }
+        get() = secrets["redditRefresh"]
+        set(v) { secrets["redditRefresh"] = v }
 
     override var redditUser: String?
         get() = sp.getString("redditUser", null)
         set(v) = sp.edit { putString("redditUser", v) }
 
-    fun redditSignOut() = sp.edit { remove("redditAccess"); remove("redditAccessExp"); remove("redditRefresh"); remove("redditUser") }
+    fun redditSignOut() {
+        secrets["redditAccess"] = null; secrets["redditRefresh"] = null
+        sp.edit { remove("redditAccessExp"); remove("redditUser") }
+    }
 
     // ---- updates and reports through GitHub ----
 
     /** A GitHub token that can read the app's repository (needed while it is private) and file reports. */
     var githubToken: String?
-        get() = sp.getString("githubToken", null)
-        set(v) = sp.edit { putString("githubToken", v) }
+        get() = secrets["githubToken"]
+        set(v) { secrets["githubToken"] = v }
 
     /** Look for new releases in the background and install them when the app isn't in use. */
     var autoUpdate: Boolean
@@ -215,10 +231,26 @@ class Prefs(context: Context) : RedditStore {
         sp.edit { putString("recent.$source", (listOf(q) + recent(source).filter { !it.equals(q, ignoreCase = true) }).take(12).joinToString("\n")) }
     }
 
-    fun signOut() = sp.edit { remove("token"); remove("tokenExp") }
+    fun signOut() { secrets["token"] = null; sp.edit { remove("tokenExp") } }
+
+    // ---- app lock ----
+
+    /** Ask for the phone's own unlock (fingerprint, face, PIN, pattern, password) before showing the app. */
+    var appLock: Boolean
+        get() = sp.getBoolean("appLock", false)
+        set(v) = sp.edit { putBoolean("appLock", v) }
+    /** Lock again after the app has been out of sight this many seconds; 0 = straight away. */
+    var appLockAfterSec: Int
+        get() = sp.getInt("appLockAfterSec", 60)
+        set(v) = sp.edit { putInt("appLockAfterSec", v.coerceIn(0, 3600)) }
 
     /** True once the JSON/text files of version 10 and earlier have been moved into the database. */
     var legacyImported: Boolean
         get() = sp.getBoolean("legacyImported", false)
         set(v) = sp.edit { putBoolean("legacyImported", v) }
+
+    private companion object {
+        /** What must never be stored readable: anything that lets someone act as you on a site. */
+        val SECRET_NAMES = listOf("token", "redditAccess", "redditRefresh", "githubToken")
+    }
 }
