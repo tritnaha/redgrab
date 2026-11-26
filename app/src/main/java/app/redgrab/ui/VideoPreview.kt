@@ -38,6 +38,7 @@ import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import app.redgrab.AppLog
 import app.redgrab.Clip
 import app.redgrab.MainViewModel
+import app.redgrab.PreviewMaker
 import app.redgrab.RedGifsApi
 import app.redgrab.RedGrabApp
 import kotlinx.coroutines.Dispatchers
@@ -77,11 +78,14 @@ val previewBudget: Float by lazy {
 /**
  * Roughly what a clip's preview costs to decode, in full-HD streams: by the picture size of the
  * file that will play. The SD file (or the SD stream of a clip that isn't saved) is about a
- * quarter of the HD picture. Pictures cost nothing: the image loader draws them.
+ * quarter of the HD picture. Pictures cost nothing: the image loader draws them. [copy] = the
+ * clip has a small preview copy, which is what plays.
  */
-fun previewCost(c: Clip?, saved: Set<app.redgrab.Quality>?): Float {
+fun previewCost(c: Clip?, saved: Set<app.redgrab.Quality>?, copy: Boolean = false): Float {
     if (c == null) return 1f
     if (c.isImage) return 0f
+    // A small preview copy (see PreviewMaker) costs the same whatever the clip's own size.
+    if (copy) return PreviewMaker.COST
     val full = if (c.width > 0 && c.height > 0) c.width.toFloat() * c.height / (1920f * 1080f) else 1f
     val small = if (saved.isNullOrEmpty()) c.sd != null && c.copyFile == null else app.redgrab.Quality.SD in saved
     return (if (small) full / 4 else full).coerceIn(0.1f, 4f)
@@ -155,7 +159,10 @@ fun rememberActivePreviews(grid: LazyStaggeredGridState, enabled: Boolean, max: 
             // Gone from view: stop at once, which frees its decoder.
             if (active.value.any { it !in keep }) active.value = active.value.filterTo(LinkedHashSet()) { it in keep }
             delay(DWELL_MS) // a new scroll position cancels this
-            val add = pickPreviews(start.filter { isEligible(it) }, active.value, max, previewBudget) { costOf(it) }
+            // While preview copies are being made, one decoder and some headroom are left for the conversion.
+            val making = PreviewMaker.waiting.value > 0
+            val add = pickPreviews(start.filter { isEligible(it) }, active.value, if (making) max - 1 else max,
+                if (making) previewBudget - PreviewMaker.RESERVE else previewBudget) { costOf(it) }
             for (pair in add.chunked(2)) {
                 active.value = active.value + pair
                 delay(45)
@@ -173,9 +180,10 @@ fun isPreviewing(moving: State<Set<String>>, id: String): Boolean {
 }
 
 /**
- * A muted, looping preview drawn over a tile's still image. Saved clips play from the phone
- * (SD file if there is one, since it's lighter); unsaved ones stream their SD version when
- * [allowStream] is on. Fades in once the first frame is ready, so there's never a black flash.
+ * A muted, looping preview drawn over a tile's still image. Saved clips play from the phone:
+ * their small preview copy when one has been made (see [PreviewMaker]), else their own file (SD
+ * if there is one, since it's lighter). Unsaved ones stream their SD version when [allowStream]
+ * is on. Fades in once the first frame is ready, so there's never a black flash.
  */
 @OptIn(UnstableApi::class)
 @Composable
@@ -207,10 +215,28 @@ fun VideoPreview(vm: MainViewModel, clip: Clip, allowStream: Boolean, modifier: 
         }
     }
 
-    LaunchedEffect(clip.id, allowStream) {
-        // No check that the file is still there (that asks the storage provider and delays every start);
-        // a missing file simply leaves the still picture.
-        val source = withContext(Dispatchers.IO) { vm.library.previewSource(clip, allowStream, verify = false) } ?: return@LaunchedEffect
+    // A preview copy that won't play is thrown away and the clip's own file plays instead.
+    var copyFailed by remember(clip.id) { mutableStateOf(false) }
+    var playingCopy by remember(clip.id) { mutableStateOf(false) }
+    DisposableEffect(exo) {
+        val l = object : Player.Listener {
+            override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
+                if (playingCopy) { vm.library.dropPreview(clip.id); copyFailed = true }
+            }
+        }
+        exo.addListener(l)
+        onDispose { exo.removeListener(l) }
+    }
+
+    LaunchedEffect(clip.id, allowStream, copyFailed) {
+        // The small preview copy when there is one. Otherwise the clip's own file (with no check that it is
+        // still there: that asks the storage provider and delays every start; a missing file simply leaves
+        // the still picture), and a copy is ordered for next time.
+        val copy = if (copyFailed) null else vm.library.previewCopy(clip)
+        playingCopy = copy != null
+        val source = copy?.let { it to true }
+            ?: withContext(Dispatchers.IO) { vm.library.previewSource(clip, allowStream, verify = false) } ?: return@LaunchedEffect
+        if (copy == null && source.second && !copyFailed) PreviewMaker.request(ctx, clip, source.first)
         runCatching {
             val (uri, local) = source
             val factory = if (local) DefaultMediaSourceFactory(DefaultDataSource.Factory(ctx)) else {

@@ -307,7 +307,7 @@ fun LibraryScreen(vm: MainViewModel, snack: SnackbarHostState, onSignIn: () -> U
             val streamOk = vm.previewUnsaved && !vm.offline
             val shownById = remember(shown) { shown.associateBy { it.id } }
             val moving = rememberActivePreviews(gridState, vm.previewsActive, vm.previewLimit, changeKey = s.saved.size,
-                cost = { id -> previewCost(shownById[id], s.qualities[id]) }) { id ->
+                cost = { id -> previewCost(shownById[id], s.qualities[id], vm.previewCopies && id in s.localPreviews) }) { id ->
                 id in s.saved || (streamOk && shownById[id]?.let { it.sd != null || it.hd != null } == true)
             }
             // Rows above the tiles keep a margin even when the tiles themselves run edge to edge.

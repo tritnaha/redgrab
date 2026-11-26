@@ -229,7 +229,7 @@ fun DiscoverScreen(vm: MainViewModel, onSignIn: () -> Unit, onOpenSettings: () -
         val streamOk = vm.previewUnsaved
         val onlineById = remember(d.items) { d.items.associateBy { it.id } }
         val moving = rememberActivePreviews(grid, vm.previewsActive, vm.previewLimit, changeKey = s.saved.size,
-            cost = { id -> previewCost(byId[id] ?: onlineById[id], s.qualities[id]) }) { id -> id in s.saved || streamOk }
+            cost = { id -> previewCost(byId[id] ?: onlineById[id], s.qualities[id], vm.previewCopies && id in s.localPreviews) }) { id -> id in s.saved || streamOk }
         val head = Modifier.padding(horizontal = m.head)
         // Shortcuts: on Reddit your saved and upvoted posts and the subreddits you joined; then what you opened recently.
         val shortcuts = remember(source, d.subs, vm.recents, vm.redditUser) {

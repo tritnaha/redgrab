@@ -70,7 +70,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.redgrab.BuildConfig
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.ui.Alignment
+import androidx.compose.material.icons.filled.Compress
 import app.redgrab.Format
+import app.redgrab.PreviewMaker
 import app.redgrab.MainViewModel
 import app.redgrab.RedditLoginActivity
 import app.redgrab.Updater
@@ -199,6 +203,19 @@ fun SettingsScreen(vm: MainViewModel, onSignIn: () -> Unit, onOpenLog: () -> Uni
                     SwitchRow(Icons.Default.Public, "Also for clips that aren't saved",
                         "Streams a small version from RedGifs for unsaved clips and the Online tab. Uses mobile data.",
                         vm.previewUnsaved, onChange = vm::changePreviewUnsaved)
+                    SwitchRow(Icons.Default.Compress, "Small preview copies",
+                        "Saved clips get a short, small copy for the grid. Lighter on battery; made as clips come up.",
+                        vm.previewCopies, onChange = vm::changePreviewCopies)
+                    if (vm.previewCopies) {
+                        val waiting by PreviewMaker.waiting.collectAsStateWithLifecycle()
+                        LaunchedEffect(s.localPreviews.size) { vm.measurePreviewCopies() }
+                        Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Text("%,d made · %s".format(s.localPreviews.size, Format.size(vm.previewCopyBytes)) + if (waiting > 0) " · %,d waiting".format(waiting) else "",
+                                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
+                            TextButton(onClick = vm::makeAllPreviewCopies, enabled = waiting == 0) { Text("Make all") }
+                            TextButton(onClick = vm::clearPreviewCopies, enabled = s.localPreviews.isNotEmpty() || waiting > 0) { Text("Clear") }
+                        }
+                    }
                     Text("How many play at once", fontWeight = FontWeight.Medium, modifier = Modifier.padding(start = 16.dp, top = 4.dp))
                     SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
                         // 0 = everything on screen, up to what the phone can decode at once.

@@ -99,6 +99,10 @@ class Prefs(context: Context) : RedditStore {
         set(v) = sp.edit { putBoolean("previewUnsaved", v) }
 
     /** How many previews may play at the same time: 2, 4 or 6, or 0 for everything on screen. */
+    /** Make and play small preview copies of saved clips (see PreviewMaker). */
+    var previewCopies: Boolean
+        get() = sp.getBoolean("previewCopies", true)
+        set(v) = sp.edit { putBoolean("previewCopies", v) }
     var previewCount: Int
         get() = sp.getInt("previewCount", 0)
         set(v) = sp.edit { putInt("previewCount", v.coerceIn(0, 6)) }

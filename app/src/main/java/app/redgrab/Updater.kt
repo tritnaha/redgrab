@@ -328,7 +328,7 @@ object BugReport {
             "Library" to "${s.originals.size} clips, ${s.savedCount} saved, ${s.failures.size} failed, ${s.collections.size} collections, ${s.likedTotal} liked",
             "Online source" to (prefs.onlineSource ?: "RedGifs"),
             "Layout" to "${if (prefs.wall) "wall" else "grid"}, ${prefs.columns} per row; previews ${if (prefs.previews) "on" else "off"}" +
-                " (${if (prefs.previewCount == 0) "all" else prefs.previewCount.toString()}), unsaved ${if (prefs.previewUnsaved) "on" else "off"}; fill screen ${if (prefs.playerFill) "on" else "off"}",
+                " (${if (prefs.previewCount == 0) "all" else prefs.previewCount.toString()}), unsaved ${if (prefs.previewUnsaved) "on" else "off"}, copies ${if (prefs.previewCopies) "on" else "off"} (${s.localPreviews.size}); fill screen ${if (prefs.playerFill) "on" else "off"}",
             "Auto-update" to (if (prefs.autoUpdate) "on" else "off"),
         ).joinToString("\n") { (k, v) -> "$k: $v" }
     }

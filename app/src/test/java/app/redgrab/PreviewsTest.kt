@@ -106,4 +106,25 @@ class PreviewsTest {
         assertEquals(1f, previewCost(null, null), 0.001f)
         assertEquals(0.1f, previewCost(clip(320, 240), setOf(Quality.SD)), 0.001f)   // never counted as free
     }
+
+    @Test fun previewCopiesAreSmallShortAndCheap() {
+        // The short side becomes 360, whichever way the clip is turned; sizes stay even; nothing is scaled up.
+        assertEquals(360, PreviewMaker.targetHeight(1920, 1080))
+        assertEquals(640, PreviewMaker.targetHeight(1080, 1920))
+        assertEquals(360, PreviewMaker.targetHeight(1080, 1080))
+        assertEquals(240, PreviewMaker.targetHeight(426, 240))
+        assertEquals(0, PreviewMaker.targetHeight(1080, 1350) % 2)
+        assertEquals(360, PreviewMaker.targetHeight(0, 0))
+        // Short clips play from the start; longer ones a little way in, never far.
+        assertEquals(0L, PreviewMaker.startMs(8_000))
+        assertEquals(4_500L, PreviewMaker.startMs(30_000))
+        assertEquals(5_000L, PreviewMaker.startMs(600_000))
+        // A copy costs the same small amount whatever the clip's own size, so a screenful fits the budget.
+        val hd = clip(1920, 1080)
+        assertEquals(1f, app.redgrab.ui.previewCost(hd, setOf(Quality.HD)), 0.001f)
+        assertEquals(PreviewMaker.COST, app.redgrab.ui.previewCost(hd, setOf(Quality.HD), copy = true), 0.001f)
+        val ids = (1..20).map { "c$it" }
+        assertEquals(20, app.redgrab.ui.pickPreviews(ids, emptySet(), 20, 4f) { PreviewMaker.COST }.size)
+        assertEquals(4, app.redgrab.ui.pickPreviews(ids, emptySet(), 20, 4f) { 1f }.size)
+    }
 }

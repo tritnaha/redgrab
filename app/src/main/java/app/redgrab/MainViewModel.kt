@@ -329,6 +329,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         private set
     var previewCount by mutableStateOf(prefs.previewCount)
         private set
+    var previewCopies by mutableStateOf(prefs.previewCopies)
+        private set
+    /** Bytes the preview copies take up (read when Settings asks). */
+    var previewCopyBytes by mutableStateOf(0L)
+        private set
     /** How many previews may really play at once: the chosen number, or as many as the phone can decode. */
     val previewLimit: Int get() = if (previewCount == 0) app.redgrab.ui.maxPreviews else previewCount
     var playerFill by mutableStateOf(prefs.playerFill)
@@ -695,6 +700,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun changePreviews(v: Boolean) { prefs.previews = v; previews = v }
     fun changePreviewUnsaved(v: Boolean) { prefs.previewUnsaved = v; previewUnsaved = v }
     fun changePreviewCount(v: Int) { prefs.previewCount = v; previewCount = prefs.previewCount }
+    fun changePreviewCopies(v: Boolean) { prefs.previewCopies = v; previewCopies = v; if (!v) PreviewMaker.cancel() }
+    fun measurePreviewCopies() { viewModelScope.launch(Dispatchers.IO) { previewCopyBytes = library.previewBytes() } }
+    fun makeAllPreviewCopies() { viewModelScope.launch(Dispatchers.Default) { PreviewMaker.requestAll(getApplication<Application>()) } }
+    fun clearPreviewCopies() { PreviewMaker.cancel(); viewModelScope.launch(Dispatchers.IO) { library.clearPreviews(); previewCopyBytes = 0 } }
     fun changeColumns(v: Int) { prefs.columns = v; columns = prefs.columns }
 
     // ---- collections & auto-sync -----------------------------------------------------

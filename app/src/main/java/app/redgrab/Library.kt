@@ -216,6 +216,8 @@ data class LibraryState(
     val watched: Set<String> = emptySet(),
     /** Clip IDs with a thumbnail stored on the phone (works offline). */
     val localThumbs: Set<String> = emptySet(),
+    /** Clip IDs with a small preview copy on the phone (see [PreviewMaker]). */
+    val localPreviews: Set<String> = emptySet(),
     /** Files that are byte-for-byte identical to another saved file: file name → the first file with that content. */
     val duplicates: Map<String, String> = emptyMap(),
     /** Clips that arrived in a sync and haven't been opened yet. */
@@ -241,6 +243,7 @@ class Library(private val ctx: Context) {
     private val db = AppDb.open(ctx)
     private val store = db.store()
     private val thumbDir = File(ctx.filesDir, "thumbs")
+    private val previewDir = File(ctx.filesDir, "previews")
     /** Saved file name → (size in bytes, SHA-256), recorded when a download finishes. */
     private var fileIndex: Map<String, Pair<Long, String>> = emptyMap()
     private val refreshLock = Mutex()
@@ -290,6 +293,7 @@ class Library(private val ctx: Context) {
                 collections = store.collections().map { RgCollection(it.id, it.name, it.count, it.thumb) },
                 watched = store.watched().toSet(),
                 localThumbs = thumbDir.list()?.mapTo(HashSet()) { it.removeSuffix(".jpg") } ?: emptySet(),
+                localPreviews = previewDir.list()?.filter { it.endsWith(".mp4") }?.mapTo(HashSet()) { it.removeSuffix(".mp4") } ?: emptySet(),
                 duplicates = findDuplicates(),
                 unseen = store.unseen().toSet(),
             )
@@ -916,8 +920,32 @@ class Library(private val ctx: Context) {
     }
 
     private fun dropThumbs(ids: kotlin.collections.Collection<String>) {
-        ids.forEach { thumbFile(it).delete() }
-        _state.update { it.copy(localThumbs = it.localThumbs - ids.toSet()) }
+        ids.forEach { thumbFile(it).delete(); previewFile(it).delete() }
+        _state.update { it.copy(localThumbs = it.localThumbs - ids.toSet(), localPreviews = it.localPreviews - ids.toSet()) }
+    }
+
+    // ---- small preview copies for the grid (made by PreviewMaker) ----------------------------
+
+    fun previewFile(id: String) = File(previewDir, id.replace(UNSAFE_NAME, "_") + ".mp4")
+
+    /** The small preview copy of a clip, if the setting is on and one has been made. */
+    fun previewCopy(c: Clip): Uri? =
+        if (prefs.previewCopies && c.id in _state.value.localPreviews) Uri.fromFile(previewFile(c.id)) else null
+
+    fun notePreview(id: String) = _state.update { it.copy(localPreviews = it.localPreviews + id) }
+
+    /** Forgets a copy that wouldn't play; the clip plays from its own file again. */
+    fun dropPreview(id: String) {
+        previewFile(id).delete()
+        _state.update { it.copy(localPreviews = it.localPreviews - id) }
+    }
+
+    /** Bytes used by the preview copies. */
+    fun previewBytes(): Long = previewDir.listFiles()?.sumOf { it.length() } ?: 0L
+
+    fun clearPreviews() {
+        previewDir.listFiles()?.forEach { it.delete() }
+        _state.update { it.copy(localPreviews = emptySet()) }
     }
 
     // ---- "New": clips that arrived in a sync and haven't been opened ------------------------
