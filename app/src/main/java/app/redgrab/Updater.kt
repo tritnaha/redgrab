@@ -47,6 +47,8 @@ object Updater {
         data object Idle : State
         data object Checking : State
         data object UpToDate : State
+        /** The repository has no release at all yet. */
+        data object NoRelease : State
         data class Available(val release: Release) : State
         data class Downloading(val release: Release, val percent: Int) : State
         /** Downloaded and waiting to be installed. */
@@ -103,6 +105,13 @@ object Updater {
             val token = prefs.githubToken
             http.newCall(request("$API/releases/latest", token, "application/vnd.github+json").build()).execute().use { r ->
                 val body = r.body?.string().orEmpty()
+                if (r.code == 404 && repoIsPublic(ctx) == true) {
+                    // The repository can be read, so "not found" means nothing has been published yet.
+                    prefs.lastUpdateCheck = System.currentTimeMillis()
+                    AppLog.i("Update check: no release has been published yet")
+                    _state.value = State.NoRelease
+                    return@withContext null
+                }
                 if (!r.isSuccessful) throw HttpException(r.code, explain(r.code, !token.isNullOrBlank()))
                 prefs.lastUpdateCheck = System.currentTimeMillis()
                 val release = parseRelease(body)
@@ -293,7 +302,7 @@ class UpdateReceiver : BroadcastReceiver() {
     }
 
     private fun notify(ctx: Context, title: String, text: String, tap: PendingIntent) = runCatching {
-        val n = NotificationCompat.Builder(ctx, RedGrabApp.CH_DONE).setSmallIcon(R.drawable.ic_notify)
+        val n = Notices.builder(ctx, RedGrabApp.CH_DONE)
             .setContentTitle(title).setContentText(text).setContentIntent(tap).setAutoCancel(true).build()
         ctx.getSystemService(NotificationManager::class.java).notify(NOTIFICATION, n)
     }

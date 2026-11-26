@@ -341,7 +341,8 @@ class DownloadWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(c
         AppLog.i("Download finished: $msg (${Format.size(runBytes)})")
         lib.updateDownload { progress.copy(running = false, currentId = null, etaSec = -1, message = msg) }
         // A run that only found deleted clips has nothing worth a notification.
-        if (finishedOk > 0 || progress.failed > 0 || stoppedForAuth || needsCheck != null || gone == 0) notifyDone(msg)
+        if (finishedOk > 0 || progress.failed > 0 || stoppedForAuth || needsCheck != null || gone == 0)
+            notifyDone(Notices.done(finishedOk, progress.failed, needsCheck != null, stoppedForAuth))
         if (stoppedForAuth || needsCheck != null) Result.failure() else Result.success()
     }
 
@@ -428,11 +429,12 @@ class DownloadWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(c
             val work = java.io.File(applicationContext.cacheDir, "hls")
             val name = clip.id + q.suffix
             val mp4 = try {
-                HlsSaver.save(http, firstUrl, work, name, onBytes)
+                HlsSaver.save(http, firstUrl, work, name, onTotal = { fileTotal = it }, onBytes = onBytes)
             } catch (e: HttpException) {
                 if (e.code !in setOf(401, 403, 404, 410)) throw e
                 AppLog.w("Stream address for ${clip.id} expired (HTTP ${e.code}); fetching a fresh one")
-                HlsSaver.save(http, fresh()?.url(q) ?: throw e, work, name, onBytes)
+                fileHave = 0
+                HlsSaver.save(http, fresh()?.url(q) ?: throw e, work, name, onTotal = { fileTotal = it }, onBytes = onBytes)
             }
             try {
                 resolver.openOutputStream(partUri, "wt")!!.use { out -> mp4.inputStream().use { it.copyTo(out, 256 * 1024) } }
@@ -546,10 +548,9 @@ class DownloadWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(c
     private fun notifyVerify() = runCatching {
         val i = Intent(applicationContext, VerifyActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         val pi = PendingIntent.getActivity(applicationContext, 3, i, PendingIntent.FLAG_IMMUTABLE)
-        val n = NotificationCompat.Builder(applicationContext, RedGrabApp.CH_DONE)
-            .setSmallIcon(R.drawable.ic_notify)
-            .setContentTitle("RedGrab paused")
-            .setContentText("RedGifs wants a quick human check. Tap to verify and continue.")
+        val n = Notices.builder(applicationContext, RedGrabApp.CH_DONE)
+            .setContentTitle(Notices.CHECK_TITLE)
+            .setContentText(Notices.CHECK)
             .setContentIntent(pi)
             .setAutoCancel(true)
             .build()
@@ -576,14 +577,10 @@ class DownloadWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(c
     )
 
     private fun foreground(p: DownloadProgress): ForegroundInfo {
-        val detail = buildString {
-            append("${p.done} of ${p.queued}")
-            if (p.bytesPerSec > 0) append(" · ${Format.speed(p.bytesPerSec)}")
-            if (p.etaSec >= 0) append(" · ${Format.eta(p.etaSec)} left")
-        }
-        val n = NotificationCompat.Builder(applicationContext, RedGrabApp.CH_PROGRESS)
-            .setSmallIcon(R.drawable.ic_notify)
-            .setContentTitle("RedGrab — saving clips")
+        // Counts and speed only: never which clip or which site (see Notices).
+        val detail = Notices.progress(p.done, p.queued, Format.speed(p.bytesPerSec).takeIf { p.bytesPerSec > 0 }, Format.eta(p.etaSec).takeIf { p.etaSec >= 0 })
+        val n = Notices.builder(applicationContext, RedGrabApp.CH_PROGRESS)
+            .setContentTitle(Notices.SAVING)
             .setContentText(detail)
             .setContentIntent(openAppIntent())
             .setOngoing(true)
@@ -596,8 +593,8 @@ class DownloadWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(c
     }
 
     private fun notifyDone(msg: String) = runCatching {
-        val n = NotificationCompat.Builder(applicationContext, RedGrabApp.CH_DONE)
-            .setSmallIcon(R.drawable.ic_notify)
+        if (!lib.prefs.notifyDone) return@runCatching
+        val n = Notices.builder(applicationContext, RedGrabApp.CH_DONE)
             .setContentTitle("RedGrab")
             .setContentText(msg)
             .setContentIntent(openAppIntent())

@@ -315,7 +315,7 @@ fun LibraryScreen(vm: MainViewModel, snack: SnackbarHostState, onSignIn: () -> U
             val head = Modifier.padding(horizontal = m.head)
             LazyVerticalStaggeredGrid(
                 state = gridState,
-                columns = StaggeredGridCells.Fixed(vm.columns),
+                columns = StaggeredGridCells.Fixed(gridColumns(vm.columns)),
                 contentPadding = PaddingValues(start = m.side, end = m.side, top = 2.dp, bottom = navPad + 12.dp),
                 horizontalArrangement = Arrangement.spacedBy(m.gap),
                 verticalItemSpacing = m.gap,
@@ -451,7 +451,7 @@ fun LibraryScreen(vm: MainViewModel, snack: SnackbarHostState, onSignIn: () -> U
                         thumb = thumbModel(s, vm.library, clip),
                         wall = vm.wall,
                         corner = m.corner,
-                        compact = vm.columns >= 5,
+                        compact = gridColumns(vm.columns) >= 5,
                         preview = if (isPreviewing(moving, clip.id)) ({ VideoPreview(vm, clip, streamOk, Modifier.fillMaxSize()) }) else null,
                         saved = clip.id in s.saved,
                         qualities = s.qualities[clip.id] ?: emptySet(),

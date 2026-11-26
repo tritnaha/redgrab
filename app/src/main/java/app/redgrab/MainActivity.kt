@@ -193,6 +193,13 @@ class MainActivity : ComponentActivity() {
                     )
                 }
 
+                vm.whatsNew?.let { app.redgrab.ui.WhatsNewDialog(it, vm::closeWhatsNew) }
+                // An update that is downloaded is offered once per start; "Later" leaves it in Settings → About.
+                val updateState by Updater.state.collectAsStateWithLifecycle()
+                var updateDeclined by rememberSaveable { mutableIntStateOf(0) }
+                (updateState as? Updater.State.Ready)?.release?.takeIf { it.build != updateDeclined && vm.whatsNew == null }?.let { r ->
+                    app.redgrab.ui.UpdateReadyDialog(r, onInstall = { updateDeclined = r.build; vm.installUpdate() }, onLater = { updateDeclined = r.build })
+                }
                 // Last, so it lies over everything else, dialogs included.
                 if (AppLock.locked) app.redgrab.ui.LockScreen(AppLock.asking, onUnlock = { askIdentity("Unlock RedGrab") }, onLeave = { moveTaskToBack(true) })
 

@@ -20,6 +20,22 @@ val sharedKey = rootProject.file("signing/release.keystore")
 val gitSha = providers.exec { commandLine("git", "rev-parse", "--short", "HEAD"); isIgnoreExitValue = true }
     .standardOutput.asText.map { it.trim() }.getOrElse("").ifEmpty { "unknown" }
 
+/** Puts the repository's CHANGELOG.md into the app, so "What's new" shows the same text as GitHub. */
+abstract class ChangelogAsset : DefaultTask() {
+    @get:InputFile abstract val source: RegularFileProperty
+    @get:OutputDirectory abstract val outputDir: DirectoryProperty
+    @TaskAction fun copy() {
+        val dir = outputDir.get().asFile.apply { mkdirs() }
+        source.get().asFile.copyTo(File(dir, "CHANGELOG.md"), overwrite = true)
+    }
+}
+val changelogAsset = tasks.register<ChangelogAsset>("changelogAsset") {
+    source.set(rootProject.layout.projectDirectory.file("CHANGELOG.md"))
+}
+androidComponents {
+    onVariants { variant -> variant.sources.assets?.addGeneratedSourceDirectory(changelogAsset, ChangelogAsset::outputDir) }
+}
+
 android {
     namespace = "app.redgrab"
     compileSdk = 37
@@ -29,8 +45,8 @@ android {
         minSdk = 26
         targetSdk = 36
         // The build number has to go up with every release: the updater compares it.
-        versionCode = 18
-        versionName = "13.5"
+        versionCode = 19
+        versionName = "13.6"
         buildConfigField("String", "GITHUB_REPO", "\"tritnaha/redgrab\"")
         buildConfigField("String", "GIT_SHA", "\"$gitSha\"")
         buildConfigField("String", "BUILD_DATE", "\"${LocalDate.now()}\"")

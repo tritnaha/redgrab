@@ -47,14 +47,14 @@ class SyncWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, 
         if (!lib.prefs.signedIn || lib.state.value.watched.isEmpty()) return Result.success()
         // An expired session is renewed out of sight; only when that doesn't work are you asked to sign in.
         if (Session.state(lib.prefs) == Session.State.Expired && !SessionRenewer.renew(applicationContext)) {
-            notify("Sign in again to keep syncing"); return Result.success()
+            notify(Notices.SIGN_IN); return Result.success()
         }
         AppLog.i("Background sync started")
         val result = lib.refresh()
         result.exceptionOrNull()?.let { e ->
             when (e) {
-                is AuthException -> notify("Sign in again to keep syncing")
-                is VerificationRequiredException -> { lib.prefs.pendingVerification = e.subject; notify("RedGifs wants a quick check before syncing") }
+                is AuthException -> notify(Notices.SIGN_IN)
+                is VerificationRequiredException -> { lib.prefs.pendingVerification = e.subject; notify(Notices.SYNC_CHECK) }
                 else -> AppLog.w("Background sync failed: ${e.message}")
             }
             return Result.success() // try again at the next scheduled time
@@ -70,8 +70,8 @@ class SyncWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, 
     private fun notify(text: String) = runCatching {
         val pi = PendingIntent.getActivity(applicationContext, 5,
             Intent(applicationContext, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP), PendingIntent.FLAG_IMMUTABLE)
-        val n = NotificationCompat.Builder(applicationContext, RedGrabApp.CH_DONE)
-            .setSmallIcon(R.drawable.ic_notify).setContentTitle("RedGrab").setContentText(text)
+        if (!applicationContext.library.prefs.notifyDone) return@runCatching
+        val n = Notices.builder(applicationContext, RedGrabApp.CH_DONE).setContentTitle("RedGrab").setContentText(text)
             .setContentIntent(pi).setAutoCancel(true).build()
         applicationContext.getSystemService(NotificationManager::class.java).notify(6, n)
     }

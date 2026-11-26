@@ -59,7 +59,7 @@ object WhatsAppShare {
                     val http = api?.http ?: RedGifsApi.clientFor(ctx.userAgent)
                     val url = clip.url(Quality.HD) ?: clip.url(Quality.SD) ?: error("No video URL")
                     if (HlsSaver.isHls(url)) {
-                        val mp4 = HlsSaver.save(http, url, dir, "stream") { }
+                        val mp4 = HlsSaver.save(http, url, dir, "stream", onBytes = {})
                         if (!mp4.renameTo(out)) error("Could not prepare the clip")
                     } else {
                         val response = try {

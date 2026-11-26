@@ -72,7 +72,8 @@ jobs:
         run: |
           apk="RedGrab-$NAME-$BUILD.apk"
           cp app/build/outputs/apk/release/app-release.apk "$apk"
-          last=$(gh release list --limit 1 --json tagName --jq '.[0].tagName' 2>/dev/null || true)
-          if [ -n "$last" ] && git rev-parse "$last" > /dev/null 2>&1; then range="$last..HEAD"; else range="-15"; fi
-          git log --no-merges --pretty='- %s' $range | head -40 > notes.md
+          # Release notes: this version's part of CHANGELOG.md (the app shows them before installing).
+          awk -v v="$NAME" '/^## /{on = ($2 == v)} on && !/^## / && !/^\[Details\]/' CHANGELOG.md | sed -e '/./,$!d' > notes.md
+          if [ ! -s notes.md ]; then echo "::error::CHANGELOG.md has no entry for version $NAME"; exit 1; fi
+          printf '\n[All changes](https://github.com/%s/blob/%s/CHANGELOG.md)\n' "$GITHUB_REPOSITORY" "$GITHUB_SHA" >> notes.md
           gh release create "v$NAME" "$apk" --title "RedGrab $NAME" --notes-file notes.md --target "$GITHUB_SHA"

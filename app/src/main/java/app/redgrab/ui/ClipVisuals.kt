@@ -112,3 +112,18 @@ fun ViewSheet(vm: MainViewModel, onClose: () -> Unit) {
         }
     }
 }
+
+/**
+ * Clips per row for a screen of [widthDp] × [heightDp]: the chosen number when the phone is
+ * upright; turned sideways, as many more as keep the tiles about the size they were.
+ */
+fun columnsFor(chosen: Int, widthDp: Int, heightDp: Int): Int =
+    if (widthDp <= heightDp || heightDp <= 0) chosen
+    else kotlin.math.round(chosen * widthDp.toFloat() / heightDp).toInt().coerceIn(chosen, 14)
+
+/** Clips per row on the screen as it is held right now (see [columnsFor]). */
+@androidx.compose.runtime.Composable
+fun gridColumns(chosen: Int): Int {
+    val c = androidx.compose.ui.platform.LocalConfiguration.current
+    return columnsFor(chosen, c.screenWidthDp, c.screenHeightDp)
+}

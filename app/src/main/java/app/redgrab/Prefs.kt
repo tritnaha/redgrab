@@ -233,6 +233,16 @@ class Prefs(context: Context) : RedditStore {
 
     fun signOut() { secrets["token"] = null; sp.edit { remove("tokenExp") } }
 
+    /** Post a notification when a download run finishes or sync needs you. (The one shown while saving is required by Android.) */
+    var notifyDone: Boolean
+        get() = sp.getBoolean("notifyDone", true)
+        set(v) = sp.edit { putBoolean("notifyDone", v) }
+
+    /** The build whose "What's new" has been shown; 0 = none yet. */
+    var lastSeenBuild: Int
+        get() = sp.getInt("lastSeenBuild", 0)
+        set(v) = sp.edit { putInt("lastSeenBuild", v) }
+
     // ---- app lock ----
 
     /** Ask for the phone's own unlock (fingerprint, face, PIN, pattern, password) before showing the app. */

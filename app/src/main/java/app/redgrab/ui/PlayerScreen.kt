@@ -365,12 +365,15 @@ fun PlayerScreen(vm: MainViewModel, session: PlayerSession) {
             // Between the bar above and the panel below (neither passes taps on), and clear of both sides,
             // so there is always background left to tap: at least a tenth of the width on each side.
             val d = LocalDensity.current
-            val side = with(d) { maxOf(40.dp, (boxSize.width * 0.10f).toDp()) }
+            val side = with(d) { maxOf(40.dp, (boxSize.width * (if (boxSize.width > boxSize.height) 0.14f else 0.10f)).toDp()) }
             val gap = 16.dp
             val room = with(d) { (boxSize.height * 0.42f).toDp() } // the panel never takes more than this from the clip
-            val top = if (fullscreen || topBar == 0) 56.dp else with(d) { topBar.toDp() } + gap
-            val bottom = if (fullscreen || bottomPanel == 0) 56.dp else minOf(with(d) { bottomPanel.toDp() }, room) + gap
-            (if (fullscreen) Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing) else Modifier.fillMaxSize())
+            // Sideways there isn't the height to stack bar, clip and panel: the clip takes the height and the
+            // panel lies over its lower part, as a see-through band. The sides stay free to tap.
+            val sideways = boxSize.width > boxSize.height
+            val top = if (sideways) 8.dp else if (fullscreen || topBar == 0) 56.dp else with(d) { topBar.toDp() } + gap
+            val bottom = if (sideways) 8.dp else if (fullscreen || bottomPanel == 0) 56.dp else minOf(with(d) { bottomPanel.toDp() }, room) + gap
+            (if (fullscreen || sideways) Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing) else Modifier.fillMaxSize())
                 .padding(start = side, end = side, top = top, bottom = bottom)
         })
             .onGloballyPositioned { frame = it.boundsInParent() }
@@ -505,6 +508,8 @@ fun PlayerScreen(vm: MainViewModel, session: PlayerSession) {
                 Modifier.align(Alignment.BottomCenter).fillMaxWidth()
                     .background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.85f))))
                     .onSizeChanged { bottomPanel = it.height }
+                    // Clear of the camera cut-out when the phone is held sideways.
+                    .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal))
                     .navigationBarsPadding().pointerInput(Unit) { detectTapGestures { } }.padding(horizontal = 16.dp, vertical = 8.dp),
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {

@@ -4,7 +4,10 @@ import android.media.MediaCodec
 import android.media.MediaExtractor
 import android.media.MediaFormat
 import android.media.MediaMuxer
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.ensureActive
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
@@ -57,9 +60,13 @@ object HlsSaver {
 
     /**
      * Downloads [url] and returns the finished MP4 in [dir] (the caller moves or deletes it).
-     * [onBytes] is called with every chunk read, for progress and speed.
+     * [onBytes] is called with every chunk read, for progress and speed. [onTotal] is told how
+     * many bytes there are to download in all: asked from the server before the first piece
+     * (see [probe]), or, where it won't say, estimated from the pieces fetched so far and
+     * corrected after each one.
      */
-    suspend fun save(http: OkHttpClient, url: String, dir: File, name: String, onBytes: suspend (Int) -> Unit): File {
+    suspend fun save(http: OkHttpClient, url: String, dir: File, name: String, onTotal: (Long) -> Unit = {},
+                     onBytes: suspend (Int) -> Unit): File {
         dir.mkdirs()
         val masterUrl = url.toHttpUrl()
         val master = text(http, masterUrl)
@@ -92,8 +99,18 @@ object HlsSaver {
         val audioFile = audio?.let { File(dir, "$name.audio") }
         val out = File(dir, "$name.mp4")
         try {
-            fetch(http, pieces(videoUrl, videoList), videoFile, onBytes)
-            audio?.let { (u, list) -> fetch(http, pieces(u, list), audioFile!!, onBytes) }
+            val videoPieces = pieces(videoUrl, videoList)
+            val audioPieces = audio?.let { (u, list) -> pieces(u, list) } ?: emptyList()
+            val all = videoPieces + audioPieces
+            val known = probe(http, all)
+            if (known != null) onTotal(known) else AppLog.i("Stream for $name: the server doesn't give piece sizes; progress is estimated")
+            // Without sizes from the server: what the finished pieces weighed, scaled up to all of them.
+            var got = 0L
+            var finished = 0
+            val counting: suspend (Int) -> Unit = { n -> got += n; onBytes(n) }
+            val pieceDone: () -> Unit = { finished++; if (known == null) onTotal(estimateTotal(got, finished, all.size)) }
+            fetch(http, videoPieces, videoFile, counting, pieceDone)
+            if (audioPieces.isNotEmpty()) fetch(http, audioPieces, audioFile!!, counting, pieceDone)
             currentCoroutineContext().ensureActive()
             repack(videoFile, audioFile, out)
             return out
@@ -106,8 +123,37 @@ object HlsSaver {
         }
     }
 
+    /**
+     * The size of all [urls] together, asked from the server without downloading anything (a HEAD
+     * request each, a few at a time). Null when any of them doesn't say, so that a total is never
+     * shown that is only part of the truth.
+     */
+    suspend fun probe(http: OkHttpClient, urls: List<HttpUrl>): Long? = kotlinx.coroutines.coroutineScope {
+        if (urls.isEmpty() || urls.size > PROBE_MAX) return@coroutineScope null
+        val gate = kotlinx.coroutines.sync.Semaphore(6)
+        val sizes = urls.distinct().map { u ->
+            async(kotlinx.coroutines.Dispatchers.IO) {
+                gate.withPermit {
+                    runCatching {
+                        http.newCall(okhttp3.Request.Builder().url(u).head().build()).execute().use { r ->
+                            if (r.isSuccessful) r.header("Content-Length")?.toLongOrNull()?.takeIf { it > 0 } else null
+                        }
+                    }.getOrNull()
+                }
+            }
+        }.awaitAll()
+        if (sizes.any { it == null }) null else sizes.sumOf { it!! }
+    }
+
+    /** With [done] of [total] pieces fetched and [bytes] read so far, about how many bytes all of them will be. */
+    fun estimateTotal(bytes: Long, done: Int, total: Int): Long =
+        if (done <= 0 || total <= 0) -1 else if (done >= total) bytes else bytes / done * total + bytes % done * total / done
+
+    /** A stream in more pieces than this isn't asked piece by piece; its size is estimated instead. */
+    private const val PROBE_MAX = 400
+
     /** Appends every piece to [into]. A piece that fails is tried three times. */
-    private suspend fun fetch(http: OkHttpClient, urls: List<HttpUrl>, into: File, onBytes: suspend (Int) -> Unit) {
+    private suspend fun fetch(http: OkHttpClient, urls: List<HttpUrl>, into: File, onBytes: suspend (Int) -> Unit, onPiece: () -> Unit = {}) {
         val buf = ByteArray(64 * 1024)
         into.outputStream().use { out ->
             for (u in urls) {
@@ -126,6 +172,7 @@ object HlsSaver {
                                 onBytes(n)
                             }
                         }
+                        onPiece()
                         break
                     } catch (e: IOException) {
                         if ((e is HttpException && e.code in 400..499 && e.code != 408 && e.code != 429) || attempt >= 2) throw e

@@ -46,8 +46,11 @@ class RedGrabApp : Application(), SingletonImageLoader.Factory {
         Thread { runCatching { WhatsAppShare.cleanUp(this) } }.start()
         if (Build.VERSION.SDK_INT >= 26) {
             getSystemService(NotificationManager::class.java).apply {
-                createNotificationChannel(NotificationChannel(CH_PROGRESS, "Download progress", NotificationManager.IMPORTANCE_LOW))
-                createNotificationChannel(NotificationChannel(CH_DONE, "Download finished", NotificationManager.IMPORTANCE_DEFAULT))
+                // Neither kind is shown on the lock screen (see Notices).
+                createNotificationChannel(NotificationChannel(CH_PROGRESS, "Progress", NotificationManager.IMPORTANCE_LOW)
+                    .apply { lockscreenVisibility = android.app.Notification.VISIBILITY_SECRET })
+                createNotificationChannel(NotificationChannel(CH_DONE, "Finished", NotificationManager.IMPORTANCE_DEFAULT)
+                    .apply { lockscreenVisibility = android.app.Notification.VISIBILITY_SECRET })
             }
         }
     }

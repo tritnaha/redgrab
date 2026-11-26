@@ -448,6 +448,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // and make sure every saved clip has a thumbnail stored on the phone.
         rescanFolder()
         lookForUpdate()
+        greetAfterUpdate()
         if (!startupRefreshDone && prefs.refreshOnStart && prefs.signedIn && !syncIsFresh(prefs.lastSynced, prefs.startSyncHours)) {
             startupRefreshDone = true
             // Offline at launch is normal, not an error: just show what's on the phone.
@@ -535,14 +536,40 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** On opening the app: look for a newer release (at most every six hours) and fetch it, so it's ready. */
+    /**
+     * On opening the app: look for a newer release (at most every six hours) and fetch it. Once it
+     * is on the phone the main screen offers to install it (installing restarts the app, so that is
+     * never done under your hands).
+     */
     private fun lookForUpdate() {
         if (!prefs.autoUpdate || !isOnline() || System.currentTimeMillis() - prefs.lastUpdateCheck < 6 * 3_600_000L) return
-        viewModelScope.launch {
-            val release = UpdateWorker.updateNow(getApplication(), installIfIdle = false) ?: return@launch
-            if (Updater.state.value is Updater.State.Ready) say("Update ${release.version} is ready. Install it in Settings → About.")
-        }
+        viewModelScope.launch { UpdateWorker.updateNow(getApplication(), installIfIdle = false) }
     }
+
+    // ---- what's new ---------------------------------------------------------------------
+
+    val changelog: List<ChangelogEntry> by lazy { Changelog.load(getApplication()) }
+    /** Versions to show in "What's new" right now; null = nothing to show. */
+    var whatsNew by mutableStateOf<List<ChangelogEntry>?>(null)
+        private set
+    fun showChangelog() { whatsNew = changelog.ifEmpty { null } ?: return say("No changelog in this build.") }
+    fun closeWhatsNew() { whatsNew = null }
+
+    /** After an update, the first start shows what changed since the build that was there before. */
+    private fun greetAfterUpdate() {
+        val seen = prefs.lastSeenBuild
+        if (seen >= BuildConfig.VERSION_CODE) return
+        prefs.lastSeenBuild = BuildConfig.VERSION_CODE
+        val app = getApplication<Application>()
+        // A first install has nothing to compare with.
+        val fresh = runCatching { app.packageManager.getPackageInfo(app.packageName, 0).let { it.firstInstallTime == it.lastUpdateTime } }.getOrDefault(false)
+        if (fresh) return
+        whatsNew = Changelog.since(changelog, seen, BuildConfig.VERSION_CODE).ifEmpty { null }
+    }
+
+    var notifyDone by mutableStateOf(prefs.notifyDone)
+        private set
+    fun changeNotifyDone(v: Boolean) { prefs.notifyDone = v; notifyDone = v }
 
     fun copyReport(description: String) {
         app.redgrab.ui.copyText(getApplication(), "RedGrab report", BugReport.build(getApplication(), description))

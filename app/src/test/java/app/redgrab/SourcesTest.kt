@@ -514,15 +514,20 @@ class SourcesTest {
         }
         val dir = File(System.getProperty("java.io.tmpdir"), "hls-test-${System.nanoTime()}")
         var bytes = 0
+        val totals = ArrayList<Long>()
         try {
             // On a computer there's no Android to repack the pieces, so it stops there; everything before is real.
-            runBlocking { HlsSaver.save(fake.http, "$base/playlist.m3u8", dir, "ff-1-hd") { bytes += it } }
+            runBlocking { HlsSaver.save(fake.http, "$base/playlist.m3u8", dir, "ff-1-hd", onTotal = { totals += it }) { bytes += it } }
             fail("expected the repacking step to be unavailable off the phone")
         } catch (e: HlsSaver.Unsupported) {
         } finally { dir.deleteRecursively() }
-        assertEquals(listOf("vid/playlist.m3u8", "720p/video.m3u8", "720p/video0.ts", "720p/video1.ts"),
-            fake.seen.map { it.url.pathSegments.takeLast(2).joinToString("/") })
+        fun names(method: String) = fake.seen.filter { it.method == method }.map { it.url.pathSegments.takeLast(2).joinToString("/") }
+        assertEquals(listOf("vid/playlist.m3u8", "720p/video.m3u8", "720p/video0.ts", "720p/video1.ts"), names("GET"))
+        // Each piece is first asked for its size, without downloading it.
+        assertEquals(setOf("720p/video0.ts", "720p/video1.ts"), names("HEAD").toSet())
         assertEquals(6, bytes)
+        // This server gave no sizes, so the total was estimated from the pieces as they came: 4 of 2 pieces → 8, then all 6.
+        assertEquals(listOf(8L, 6L), totals)
         assertTrue(fake.seen.all { it.header("Referer") == "https://fikfap.com/" && it.header("Origin") == "https://fikfap.com" })
     }
 

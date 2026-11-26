@@ -76,6 +76,7 @@ import androidx.compose.material.icons.filled.Category
 import androidx.compose.material.icons.filled.Compress
 import app.redgrab.AppLock
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Notifications
 import app.redgrab.Format
 import app.redgrab.PreviewMaker
 import app.redgrab.MainViewModel
@@ -191,6 +192,9 @@ fun SettingsScreen(vm: MainViewModel, onSignIn: () -> Unit, onOpenLog: () -> Uni
                 SwitchRow(Icons.Default.VisibilityOff, "SFW mode",
                     "Blurs every preview, blocks playback and mutes sound. Also pauses online browsing. The eye icon on the Saved tab toggles it too.",
                     vm.sfw, onChange = vm::changeSfw)
+                SwitchRow(Icons.Default.Notifications, "Notify when done",
+                    "Notifications never name a site or a clip and stay off the lock screen.",
+                    vm.notifyDone, onChange = vm::changeNotifyDone)
                 SwitchRow(Icons.Default.Shield, "Start in SFW mode",
                     "Turn SFW mode on every time RedGrab opens.", vm.sfwOnStart, onChange = vm::changeSfwOnStart)
                 SwitchRow(Icons.AutoMirrored.Filled.VolumeDown, "Speaker volume guard",
@@ -371,6 +375,7 @@ fun SettingsScreen(vm: MainViewModel, onSignIn: () -> Unit, onOpenLog: () -> Uni
                     is Updater.State.Idle -> "Updates" to "Check"
                     is Updater.State.Checking -> "Checking…" to null
                     is Updater.State.UpToDate -> "Up to date" to "Check"
+                    is Updater.State.NoRelease -> "No release published yet" to "Check"
                     is Updater.State.Available -> "Version ${u.release.version} is available" to "Update"
                     is Updater.State.Downloading -> "Downloading ${u.release.version} · ${u.percent}%" to null
                     is Updater.State.Ready -> "Version ${u.release.version} is ready" to "Install"
@@ -392,8 +397,15 @@ fun SettingsScreen(vm: MainViewModel, onSignIn: () -> Unit, onOpenLog: () -> Uni
                     },
                 )
                 SwitchRow(Icons.Default.Sync, "Update automatically",
-                    "Looks for a new release twice a day and installs it when the app isn't in use.",
+                    "Checks when the app opens and twice a day. Installs when the app isn't in use; asks first when it is.",
                     vm.autoUpdate, onChange = vm::changeAutoUpdate)
+                ListItem(
+                    colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+                    modifier = Modifier.clickable { vm.showChangelog() },
+                    leadingContent = { Icon(Icons.Default.History, null) },
+                    headlineContent = { Text("What's new") },
+                    supportingContent = { Text("Changes in every version.") },
+                )
                 // Needed to send reports, and to read releases while the repository is private.
                 var token by remember(vm.githubToken) { mutableStateOf(vm.githubToken) }
                 OutlinedTextField(token, { token = it.trim() }, singleLine = true, label = { Text("GitHub token") },

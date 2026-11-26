@@ -241,7 +241,7 @@ fun DiscoverScreen(vm: MainViewModel, onSignIn: () -> Unit, onOpenSettings: () -
         Box(Modifier.padding(pad).fillMaxSize()) {
         LazyVerticalStaggeredGrid(
             state = grid,
-            columns = StaggeredGridCells.Fixed(vm.columns),
+            columns = StaggeredGridCells.Fixed(gridColumns(vm.columns)),
             contentPadding = PaddingValues(start = m.side, end = m.side, top = 6.dp, bottom = navPad + 12.dp),
             horizontalArrangement = Arrangement.spacedBy(m.gap),
             verticalItemSpacing = m.gap,
@@ -310,7 +310,7 @@ fun DiscoverScreen(vm: MainViewModel, onSignIn: () -> Unit, onOpenSettings: () -
             }
             itemsIndexed(d.items, key = { _, c -> c.id }) { i, c ->
                 val mine = byId[c.id]
-                OnlineTile(c, wall = vm.wall, corner = m.corner, compact = vm.columns >= 5, liked = mine?.liked == true, inCollection = mine != null && mine.colIds.isNotEmpty(),
+                OnlineTile(c, wall = vm.wall, corner = m.corner, compact = gridColumns(vm.columns) >= 5, liked = mine?.liked == true, inCollection = mine != null && mine.colIds.isNotEmpty(),
                     saved = c.id in s.saved, sfw = vm.sfw,
                     preview = if (isPreviewing(moving, c.id)) ({ VideoPreview(vm, mine ?: c, streamOk, Modifier.fillMaxSize()) }) else null,
                 ) { vm.openOnlinePlayer(d.items, i) }
