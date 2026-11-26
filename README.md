@@ -4,6 +4,16 @@ Android app that saves your RedGifs likes and collections for offline viewing, a
 
 Personal project. Adult content. Not affiliated with any of the sites.
 
+## Screenshots
+
+From version 12, with test footage.
+
+<p>
+  <img src="screenshots/v10-wall.png" alt="Saved tab, wall layout" width="240">
+  <img src="screenshots/v12-filter-row.png" alt="Saved tab with the filter row" width="240">
+  <img src="screenshots/v12-imported.png" alt="Imported clips" width="240">
+</p>
+
 ## Features
 
 **Library**
