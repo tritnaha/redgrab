@@ -6,6 +6,11 @@ time it opens after an update, and the whole list under Settings → About → W
 Each version has the sections it needs out of Added, Changed and Fixed, one line per change,
 and a link to the code that made it.
 
+## 13.7 (build 20) · 2026-11-26
+
+### Fixed
+- The app closed every time it was opened after updating to 13.6. Nothing was lost; this version starts normally.
+
 ## 13.6 (build 19) · 2026-11-26
 
 ### Added
@@ -21,6 +26,8 @@ and a link to the code that made it.
 
 ### Fixed
 - "Check for updates" said the repository might be private when there simply was no release yet.
+
+[Details](https://github.com/tritnaha/redgrab/commit/f472d6e)
 
 ## 13.5 (build 18) · 2026-11-26
 

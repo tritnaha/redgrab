@@ -42,7 +42,9 @@ class KeystoreBox(private val alias: String = "redgrab.secrets.v1") : SecretBox 
 
     @Synchronized override fun seal(name: String, plain: ByteArray): ByteArray {
         val c = Cipher.getInstance(MODE).apply { init(Cipher.ENCRYPT_MODE, key()); updateAAD(name.toByteArray()) }
-        return SecretStore.pack(c.iv, c.doFinal(plain))
+        // The nonce is asked for after encrypting: some Keystore versions only choose it then.
+        val body = c.doFinal(plain)
+        return SecretStore.pack(c.iv, body)
     }
 
     @Synchronized override fun open(name: String, sealed: ByteArray): ByteArray {

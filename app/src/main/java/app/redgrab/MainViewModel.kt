@@ -434,28 +434,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     var editingInfo by mutableStateOf<List<String>?>(null)
         private set
 
-    init {
-        refreshFolderInfo()
-        // When a download run ends, no Save button is left showing progress.
-        viewModelScope.launch {
-            var was = false
-            library.download.collect { p -> if (was && !p.running && !p.waiting) saveRequested = emptySet(); was = p.running }
-        }
-        // Re-check the save folder on every launch so files added, moved or deleted outside
-        // the app (or saved by older versions) are reflected without a sync.
-        watchNetwork()
-        // Housekeeping off the main thread: re-check the folder, drop stale partial downloads,
-        // and make sure every saved clip has a thumbnail stored on the phone.
-        rescanFolder()
-        lookForUpdate()
-        greetAfterUpdate()
-        if (!startupRefreshDone && prefs.refreshOnStart && prefs.signedIn && !syncIsFresh(prefs.lastSynced, prefs.startSyncHours)) {
-            startupRefreshDone = true
-            // Offline at launch is normal, not an error: just show what's on the phone.
-            if (isOnline()) refresh(quiet = true) else offline = true
-        }
-    }
-
     private fun isOnline(): Boolean {
         val cm = getApplication<Application>().getSystemService(android.net.ConnectivityManager::class.java) ?: return true
         val caps = cm.getNetworkCapabilities(cm.activeNetwork ?: return false) ?: return false
@@ -1421,6 +1399,33 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             else -> "${source.label} returned an error (HTTP ${e.code}). See Log."
         }
         else -> "Sync failed: ${e.message ?: e.javaClass.simpleName}"
+    }
+
+    // Start-up work. This block is deliberately the last thing in the class: Kotlin sets up a class's
+    // properties from top to bottom, so anything here may use every property above it. (In 13.6 it sat
+    // further up and used the changelog before that existed, which stopped the app on the first start
+    // after an update.)
+    init {
+        refreshFolderInfo()
+        // When a download run ends, no Save button is left showing progress.
+        viewModelScope.launch {
+            var was = false
+            library.download.collect { p -> if (was && !p.running && !p.waiting) saveRequested = emptySet(); was = p.running }
+        }
+        // Re-check the save folder on every launch so files added, moved or deleted outside
+        // the app (or saved by older versions) are reflected without a sync.
+        watchNetwork()
+        // Housekeeping off the main thread: re-check the folder, drop stale partial downloads,
+        // and make sure every saved clip has a thumbnail stored on the phone.
+        rescanFolder()
+        lookForUpdate()
+        // Showing what's new must never be able to stop the app from starting.
+        runCatching { greetAfterUpdate() }.onFailure { AppLog.e("What's new couldn't be prepared", it) }
+        if (!startupRefreshDone && prefs.refreshOnStart && prefs.signedIn && !syncIsFresh(prefs.lastSynced, prefs.startSyncHours)) {
+            startupRefreshDone = true
+            // Offline at launch is normal, not an error: just show what's on the phone.
+            if (isOnline()) refresh(quiet = true) else offline = true
+        }
     }
 
     companion object {
