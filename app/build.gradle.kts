@@ -47,6 +47,8 @@ android {
         // The build number has to go up with every release: the updater compares it.
         versionCode = 19
         versionName = "13.6"
+        // Only used by the screenshot test (app/src/androidTest), which runs on a phone or emulator.
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("String", "GITHUB_REPO", "\"tritnaha/redgrab\"")
         buildConfigField("String", "GIT_SHA", "\"$gitSha\"")
         buildConfigField("String", "BUILD_DATE", "\"${LocalDate.now()}\"")
@@ -125,4 +127,9 @@ dependencies {
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20250517") // the JSON classes Android has built in
+    // For the screenshot test only; not part of the app or of the unit tests.
+    androidTestImplementation("androidx.test.uiautomator:uiautomator:2.3.0")
+    androidTestImplementation("androidx.test:runner:1.7.0")
+    androidTestImplementation("androidx.test:core:1.7.0")
+    androidTestImplementation("androidx.test.ext:junit:1.3.0")
 }

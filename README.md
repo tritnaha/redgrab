@@ -6,12 +6,19 @@ Personal project. Adult content. Not affiliated with any of the sites.
 
 ## Screenshots
 
-From version 12, with test footage.
+Version 13.6 on an emulator, with made-up clips. The thumbnails are drawn by the screenshot test; nothing in them comes from any site.
 
 <p>
-  <img src="screenshots/v10-wall.png" alt="Saved tab, wall layout" width="240">
-  <img src="screenshots/v12-filter-row.png" alt="Saved tab with the filter row" width="240">
-  <img src="screenshots/v12-imported.png" alt="Imported clips" width="240">
+  <img src="screenshots/v13-saved.png" alt="Saved tab" width="230">
+  <img src="screenshots/v13-online.png" alt="Online tab" width="230">
+  <img src="screenshots/v13-clip.png" alt="A clip opened over the grid" width="230">
+</p>
+<p>
+  <img src="screenshots/v13-whats-new.png" alt="What's new after an update" width="230">
+  <img src="screenshots/v13-settings.png" alt="Settings" width="230">
+</p>
+<p>
+  <img src="screenshots/v13-sideways.png" alt="Saved tab with the phone turned sideways" width="700">
 </p>
 
 ## Features
@@ -103,6 +110,30 @@ One test runs against the real RedGifs site and is skipped unless asked for:
 
 ```bash
 REDGRAB_LIVE=1 ./gradlew testDebugUnitTest --tests '*LiveRedGifsTest*'
+```
+
+### Screenshots
+
+`app/src/androidTest/.../ScreenshotsTest.kt` fills the app with sample clips and takes the pictures above. It needs an emulator or a spare phone (it overwrites the app's sign-in and library there):
+
+```bash
+./gradlew assembleDebug assembleDebugAndroidTest
+```
+
+```bash
+adb install -r app/build/outputs/apk/debug/app-debug.apk
+```
+
+```bash
+adb install -r app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
+```
+
+```bash
+adb shell am instrument -w -e class app.redgrab.ScreenshotsTest app.redgrab.test/androidx.test.runner.AndroidJUnitRunner
+```
+
+```bash
+adb pull /sdcard/Android/data/app.redgrab/files/shots screenshots
 ```
 
 ### Releases

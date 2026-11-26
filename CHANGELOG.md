@@ -11,7 +11,7 @@ and a link to the code that made it.
 ### Added
 - What's new: the app lists what changed the first time it opens after an update, with a link to GitHub. The whole list is under Settings → About.
 - An update that has been downloaded is offered in a dialog, with what it changes, instead of a passing message.
-- Turned sideways, the grids show more clips per row and the clip view uses the width.
+- Turned sideways, the grids show more clips per row and the clip view uses the height.
 - Settings → Privacy → "Notify when done" switches off the finished and sync notifications.
 
 ### Changed
