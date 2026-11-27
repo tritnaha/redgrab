@@ -147,8 +147,8 @@ private fun ClipRow(vm: MainViewModel, c: Clip, checked: Boolean?, onToggle: (()
             Text(c.copyFile?.substringAfterLast('/') ?: c.id, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Text(when {
                     c.isCopy -> "${Format.duration(c.duration)} · ${c.copyNote}"
-                    c.isImage -> "Imported " + c.copyFile!!.substringAfterLast('.').uppercase()
-                    c.imported -> "Imported · ${Format.duration(c.duration)}"
+                    c.isImage -> "${c.sources.firstOrNull() ?: "Imported"} · ${c.fileExt.uppercase()}"
+                    c.imported -> "${c.sources.firstOrNull() ?: "Imported"} · ${Format.duration(c.duration)}"
                     else -> "${Format.duration(c.duration)} · ${c.user}"
                 },
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2)

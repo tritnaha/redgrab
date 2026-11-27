@@ -91,7 +91,9 @@ data class SavedRow(val id: String, val quality: String, val at: Long)
 
 /** A download that failed, with the reason shown in the app. */
 @Entity(tableName = "failure")
-data class FailureRow(@PrimaryKey val id: String, val reason: String, val firstAt: Long, val lastAt: Long, val attempts: Int)
+data class FailureRow(@PrimaryKey val id: String, val reason: String, val firstAt: Long, val lastAt: Long, val attempts: Int,
+                      /** The site no longer has the clip. */
+                      @androidx.room.ColumnInfo(defaultValue = "0") val dead: Boolean = false)
 
 /** Size and SHA-256 of each finished file (finds byte-identical duplicates). */
 @Entity(tableName = "file_index", indices = [Index("sha")])
@@ -197,7 +199,7 @@ interface Store {
 }
 
 @Database(
-    version = 2, exportSchema = false,
+    version = 3, exportSchema = false,
     entities = [ClipRow::class, OverrideRow::class, CopyRow::class, HiddenRow::class, SavedRow::class, FailureRow::class,
         FileRow::class, NicheRow::class, PerformerRow::class, CollectionRow::class, WatchedRow::class, SyncRow::class, QueueRow::class,
         UnseenRow::class],
@@ -217,11 +219,19 @@ abstract class AppDb : RoomDatabase() {
             }
         }
 
+        /** 13.4 to 13.5: clips the site has deleted. Earlier "not found" failures are such clips. */
+        private val V2_3 = object : androidx.room.migration.Migration(2, 3) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE failure ADD COLUMN dead INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("UPDATE failure SET dead = 1 WHERE reason LIKE 'Not found on %' OR reason LIKE 'Removed from %'")
+            }
+        }
+
         fun open(ctx: Context): AppDb =
             Room.databaseBuilder(ctx.applicationContext, AppDb::class.java, "redgrab.db")
                 // The library is small and is read once at start, like the files were; writes are single rows.
                 .allowMainThreadQueries()
-                .addMigrations(V1_2)
+                .addMigrations(V1_2, V2_3)
                 .build()
     }
 }

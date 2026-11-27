@@ -44,22 +44,32 @@ object WhatsAppShare {
         // A fresh folder per share: a clip WhatsApp is still reading is never overwritten by the next share.
         val dir = File(ctx.cacheDir, "share/${System.currentTimeMillis()}").apply { mkdirs() }
         clips.map { clip ->
-            val ext = if (clip.imported) clip.copyFile!!.substringAfterLast('.', "mp4").lowercase() else "mp4"
-            val out = File(dir, "${clip.id}.$ext")
+            // The type of the file on the phone, else of the online address (streams and odd addresses become MP4).
+            val ext = clip.fileExt.takeIf { it in Clip.IMAGE_EXT || it in Clip.VIDEO_EXT } ?: "mp4"
+            val out = File(dir, clip.id.replace(Regex("[^A-Za-z0-9_-]"), "_") + ".$ext")
             val local = lib.localFile(clip)
             when {
                 local != null -> ctx.contentResolver.openInputStream(local.first)!!.use { i -> out.outputStream().use { i.copyTo(it) } }
                 clip.isCopy || clip.imported -> error("The file is missing from the save folder")
                 else -> {
+                    // Not on the phone: a temporary download from the clip's own site.
                     val prefs = lib.prefs
-                    val api = RedGifsApi(prefs.token ?: error("Sign in first"), prefs.userAgent ?: error("Sign in first"))
-                    val response = try {
-                        api.download(clip.url(Quality.HD) ?: clip.url(Quality.SD) ?: error("No video URL"))
-                    } catch (e: HttpException) {
-                        val fresh = api.clip(clip.id) ?: throw e
-                        api.download(fresh.url(true) ?: throw e)
+                    val redgifs = OnlineSource.of(clip.id) == OnlineSource.RedGifs
+                    val api = if (redgifs) RedGifsApi(prefs.token ?: error("Sign in first"), prefs.userAgent ?: error("Sign in first")) else null
+                    val http = api?.http ?: RedGifsApi.clientFor(ctx.userAgent)
+                    val url = clip.url(Quality.HD) ?: clip.url(Quality.SD) ?: error("No video URL")
+                    if (HlsSaver.isHls(url)) {
+                        val mp4 = HlsSaver.save(http, url, dir, "stream", onBytes = {})
+                        if (!mp4.renameTo(out)) error("Could not prepare the clip")
+                    } else {
+                        val response = try {
+                            RedGifsApi.download(http, url)
+                        } catch (e: HttpException) {
+                            val fresh = api?.clip(clip.id) ?: throw e
+                            RedGifsApi.download(http, fresh.url(true) ?: throw e)
+                        }
+                        response.use { r -> out.outputStream().use { r.body!!.byteStream().copyTo(it) } }
                     }
-                    response.use { r -> out.outputStream().use { r.body!!.byteStream().copyTo(it) } }
                 }
             }
             FileProvider.getUriForFile(ctx, "${ctx.packageName}.share", out)

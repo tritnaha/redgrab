@@ -19,6 +19,7 @@ import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.foundation.clickable
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
@@ -32,6 +33,7 @@ import androidx.compose.material.icons.automirrored.filled.VolumeDown
 import androidx.compose.material3.Slider
 import androidx.compose.material.icons.filled.CreateNewFolder
 import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.HighQuality
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Info
@@ -69,8 +71,19 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.redgrab.BuildConfig
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.ui.Alignment
+import androidx.compose.material.icons.filled.Category
+import androidx.compose.material.icons.filled.Compress
+import app.redgrab.AppLock
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.foundation.horizontalScroll
 import app.redgrab.Format
+import app.redgrab.PreviewMaker
 import app.redgrab.MainViewModel
+import app.redgrab.RedditLoginActivity
+import app.redgrab.Updater
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -78,12 +91,16 @@ fun SettingsScreen(vm: MainViewModel, onSignIn: () -> Unit, onOpenLog: () -> Uni
     val s by vm.state.collectAsStateWithLifecycle()
     var newFolder by remember { mutableStateOf<String?>(null) }
     var confirmForget by remember { mutableStateOf(false) }
+    /** The text typed into "Report a problem" while that dialog is open, else null. */
+    var reporting by remember { mutableStateOf<String?>(null) }
     val pickFolder = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         if (uri != null) vm.setFolder(uri)
     }
     val pickImport = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         if (uri != null) vm.importFolder(uri)
     }
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    val redditSignIn = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { vm.onResume() }
 
     Scaffold(containerColor = MaterialTheme.colorScheme.background, topBar = { TopAppBar(title = { Text("Settings") }, expandedHeight = TopBarHeight) }) { pad ->
         Column(
@@ -92,12 +109,43 @@ fun SettingsScreen(vm: MainViewModel, onSignIn: () -> Unit, onOpenLog: () -> Uni
         ) {
             Section("Account") {
                 Row_(Icons.Default.AccountCircle, if (vm.signedIn) "Signed in to RedGifs" else "Not signed in",
-                    if (vm.signedIn) vm.sessionText + ". Renewing reopens RedGifs; if it still knows you, it closes by itself."
+                    if (vm.signedIn) vm.sessionText + ". Renewed by itself in the background."
                     else "Needed to read your likes and collections.")
                 Row(Modifier.padding(start = 16.dp, end = 16.dp, bottom = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(onClick = onSignIn) { Text(if (vm.signedIn) "Renew session" else "Sign in") }
                     if (vm.signedIn) OutlinedButton(onClick = vm::signOut) { Text("Sign out") }
                 }
+            }
+
+            Section("Reddit") {
+                // The ID of the "installed app" you create at reddit.com/prefs/apps; FikFap and sex.com need nothing.
+                var id by remember(vm.redditClientId) { mutableStateOf(vm.redditClientId) }
+                OutlinedTextField(id, { id = it.trim() }, singleLine = true, label = { Text("Client ID") },
+                    supportingText = { Text("reddit.com/prefs/apps → installed app, redirect URI redgrab://reddit") },
+                    modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 12.dp))
+                Row(Modifier.padding(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                    when {
+                        id != vm.redditClientId -> Button(onClick = { vm.changeRedditClientId(id) }) { Text("Save") }
+                        vm.redditUser != null -> OutlinedButton(onClick = vm::redditSignOut) { Text("Sign out") }
+                        else -> Button(enabled = id.isNotBlank(),
+                            onClick = { redditSignIn.launch(android.content.Intent(ctx, RedditLoginActivity::class.java)) }) { Text("Sign in") }
+                    }
+                    Text(when (val u = vm.redditUser) { null -> "Not signed in"; "" -> "Signed in"; else -> "u/$u" },
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+
+            Section("Online") {
+                // The same filter as the button on the Online tab.
+                var showPrefs by remember { mutableStateOf(false) }
+                if (showPrefs) ContentPrefsDialog(vm) { showPrefs = false }
+                ListItem(
+                    headlineContent = { Text("Show") },
+                    supportingContent = { Text(app.redgrab.ContentPrefs.summary(vm.contentPrefs)) },
+                    leadingContent = { Icon(Icons.Default.Tune, null) },
+                    modifier = Modifier.clickable { showPrefs = true },
+                )
             }
 
             Section("Save folder") {
@@ -139,12 +187,40 @@ fun SettingsScreen(vm: MainViewModel, onSignIn: () -> Unit, onOpenLog: () -> Uni
                 }
             }
 
+            Section("Navigation") {
+                SwitchRow(Icons.Default.History, "Back goes to the previous tab",
+                    "Off: Back leaves the app from any tab.", vm.backToTabs, onChange = vm::changeBackToTabs)
+                Text("Open on", fontWeight = FontWeight.Medium, modifier = Modifier.padding(start = 16.dp, top = 4.dp))
+                Row(Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    val options = listOf("saved" to "Saved", "online" to "Online (last site)") + app.redgrab.OnlineSource.entries.map { "online:${it.name}" to it.label }
+                    options.forEach { (value, label) -> androidx.compose.material3.FilterChip(vm.startView == value, { vm.changeStartView(value) }, { Text(label) }) }
+                }
+            }
+
             Section("Privacy") {
+                val canLock = remember { AppLock.available(ctx) }
+                val confirm = LocalConfirmIdentity.current
+                SwitchRow(Icons.Default.Lock, "App lock",
+                    if (canLock) "Unlock with the phone's fingerprint, face, PIN, pattern or password." else "Set a screen lock on the phone first.",
+                    vm.appLock, enabled = canLock || vm.appLock,
+                    // Switching it on or off asks you to unlock first, which also shows the prompt works on this phone.
+                    onChange = { on -> confirm(if (on) "Turn on app lock" else "Turn off app lock") { ok -> if (ok) vm.changeAppLock(on) } })
+                if (vm.appLock) {
+                    Text("Lock after", fontWeight = FontWeight.Medium, modifier = Modifier.padding(start = 16.dp, top = 4.dp))
+                    SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
+                        listOf(0 to "At once", 60 to "1 min", 300 to "5 min", 900 to "15 min").forEachIndexed { i, (sec, label) ->
+                            SegmentedButton(vm.appLockAfterSec == sec, { vm.changeAppLockAfter(sec) }, SegmentedButtonDefaults.itemShape(i, 4)) { Text(label) }
+                        }
+                    }
+                }
                 SwitchRow(Icons.Default.VisibilityOff, "SFW mode",
                     "Blurs every preview, blocks playback and mutes sound. Also pauses online browsing. The eye icon on the Saved tab toggles it too.",
                     vm.sfw, onChange = vm::changeSfw)
+                SwitchRow(Icons.Default.Notifications, "Notify when done",
+                    "Notifications never name a site or a clip and stay off the lock screen.",
+                    vm.notifyDone, onChange = vm::changeNotifyDone)
                 SwitchRow(Icons.Default.Shield, "Start in SFW mode",
-                    "Turn SFW mode on every time RedGrab opens.", vm.sfwOnStart, onChange = vm::changeSfwOnStart)
+                    "On when RedGrab opens after more than five minutes away.", vm.sfwOnStart, onChange = vm::changeSfwOnStart)
                 SwitchRow(Icons.AutoMirrored.Filled.VolumeDown, "Speaker volume guard",
                     "When sound plays through the phone's own speaker (not Bluetooth or headphones), lower the volume to " +
                         "${vm.volumeLimit}% if it's higher. Pressing the volume keys overrides it until the app restarts.",
@@ -158,6 +234,9 @@ fun SettingsScreen(vm: MainViewModel, onSignIn: () -> Unit, onOpenLog: () -> Uni
             Section("Downloads") {
                 Row_(Icons.Default.HighQuality, "HD first",
                     "Clips are saved in HD. SD is used only when a clip has no HD version, or when you pick \"Download in SD\" (selection menu) or tap the SD icon in the player.")
+                SwitchRow(Icons.Default.Category, "Ask for a category",
+                    "When saving a clip from Online.",
+                    vm.askCategory, onChange = vm::changeAskCategory)
                 SwitchRow(Icons.Default.CollectionsBookmark, "Include my collections",
                     "Clips in your collections are listed alongside your likes (each clip only once).",
                     vm.includeCollections, onChange = vm::changeIncludeCollections)
@@ -167,19 +246,33 @@ fun SettingsScreen(vm: MainViewModel, onSignIn: () -> Unit, onOpenLog: () -> Uni
 
             Section("Previews") {
                 SwitchRow(Icons.Default.Animation, "Moving previews",
-                    "Previews on screen play silently in a loop once you stop scrolling. Saved clips play from the phone. Paused in SFW mode and battery saver.",
+                    "Previews on screen play silently in a loop. Saved clips play from the phone. Paused in SFW mode and battery saver.",
                     vm.previews, onChange = vm::changePreviews)
                 if (vm.previews) {
                     SwitchRow(Icons.Default.Public, "Also for clips that aren't saved",
                         "Streams a small version from RedGifs for unsaved clips and the Online tab. Uses mobile data.",
                         vm.previewUnsaved, onChange = vm::changePreviewUnsaved)
-                    Text("How many play at once", fontWeight = FontWeight.Medium, modifier = Modifier.padding(start = 16.dp, top = 4.dp))
-                    SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
-                        listOf(2, 4, 6).forEachIndexed { i, n ->
-                            SegmentedButton(vm.previewCount == n, { vm.changePreviewCount(n) }, SegmentedButtonDefaults.itemShape(i, 3)) { Text("$n") }
+                    SwitchRow(Icons.Default.Compress, "Small preview copies",
+                        "Saved clips get a short, small copy for the grid. Lighter on battery; made as clips come up.",
+                        vm.previewCopies, onChange = vm::changePreviewCopies)
+                    if (vm.previewCopies) {
+                        val waiting by PreviewMaker.waiting.collectAsStateWithLifecycle()
+                        LaunchedEffect(s.localPreviews.size) { vm.measurePreviewCopies() }
+                        Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Text("%,d made · %s".format(s.localPreviews.size, Format.size(vm.previewCopyBytes)) + if (waiting > 0) " · %,d waiting".format(waiting) else "",
+                                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
+                            TextButton(onClick = vm::makeAllPreviewCopies, enabled = waiting == 0) { Text("Make all") }
+                            TextButton(onClick = vm::clearPreviewCopies, enabled = s.localPreviews.isNotEmpty() || waiting > 0) { Text("Clear") }
                         }
                     }
-                    Text("More at once looks livelier but uses more battery. The rest of the screen stays as stills.",
+                    Text("How many play at once", fontWeight = FontWeight.Medium, modifier = Modifier.padding(start = 16.dp, top = 4.dp))
+                    SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
+                        // 0 = everything on screen, up to what the phone can decode at once.
+                        listOf(2, 4, 6, 0).forEachIndexed { i, n ->
+                            SegmentedButton(vm.previewCount == n, { vm.changePreviewCount(n) }, SegmentedButtonDefaults.itemShape(i, 4)) { Text(if (n == 0) "All" else "$n") }
+                        }
+                    }
+                    Text("All: everything on screen, as far as this phone can decode at once (HD files count for more than small ones). Fewer saves battery; the rest stay as stills.",
                         style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(horizontal = 16.dp).padding(bottom = 12.dp))
                 }
@@ -189,11 +282,14 @@ fun SettingsScreen(vm: MainViewModel, onSignIn: () -> Unit, onOpenLog: () -> Uni
                 SwitchRow(Icons.AutoMirrored.Filled.VolumeOff, "Start clips muted",
                     "You can also toggle sound in the player; the choice is remembered.",
                     vm.playMuted, onChange = vm::changePlayMuted)
+                SwitchRow(Icons.Default.Fullscreen, "Fill the screen",
+                    "Off: a clip opens as a larger view over the grid; tap beside it to go back. On: upright clips cover the whole screen, edges cropped.",
+                    vm.playerFill, onChange = vm::changePlayerFill)
             }
 
             Section("Auto-sync") {
                 Row_(Icons.Default.Sync, "Synced collections",
-                    if (s.watched.isEmpty()) "None yet. Switch collections on in Browse → Collections; new clips in them are saved automatically after every sync."
+                    if (s.watched.isEmpty()) "None chosen: the list is kept up to date, nothing is downloaded. Choose them in Browse → Collections."
                     else "${s.watched.size} synced. New clips in them are saved automatically after every sync.")
                 Text("Check in the background", fontWeight = FontWeight.Medium, modifier = Modifier.padding(start = 16.dp, top = 4.dp))
                 SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
@@ -206,8 +302,7 @@ fun SettingsScreen(vm: MainViewModel, onSignIn: () -> Unit, onOpenLog: () -> Uni
                     else "Android runs the check roughly every ${vm.autoSyncHours} hours, even when the app is closed. If the RedGifs session has expired you get a notification to sign in.",
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(horizontal = 16.dp).padding(bottom = 8.dp))
-                if (vm.autoSyncHours > 0) SwitchRow(Icons.Default.Wifi, "Only on Wi-Fi",
-                    "Background checks and their downloads wait for Wi-Fi.", vm.syncWifiOnly, onChange = vm::changeSyncWifiOnly)
+                MobileDataRow(vm)
             }
 
             Section("Storage") {
@@ -226,9 +321,27 @@ fun SettingsScreen(vm: MainViewModel, onSignIn: () -> Unit, onOpenLog: () -> Uni
             }
 
             Section("Sync") {
+                SwitchRow(Icons.Default.Sync, "Remove deleted clips from collections",
+                    "A clip RedGifs has deleted is also taken out of your RedGifs collections.",
+                    vm.pruneCollections, onChange = vm::changePruneCollections)
                 SwitchRow(Icons.Default.Sync, "Sync when the app opens",
                     "Last synced: ${Format.ago(s.lastSynced)}. Pull down on the Saved tab to sync any time.",
                     vm.refreshOnStart, onChange = vm::changeRefreshOnStart)
+                if (vm.refreshOnStart) {
+                    Text("Only if the last sync is older than", fontWeight = FontWeight.Medium, modifier = Modifier.padding(start = 16.dp, top = 4.dp))
+                    SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
+                        listOf(0, 1, 6, 24).forEachIndexed { i, h ->
+                            SegmentedButton(vm.startSyncHours == h, { vm.changeStartSyncHours(h) }, SegmentedButtonDefaults.itemShape(i, 4)) { Text(if (h == 0) "Always" else "$h h") }
+                        }
+                    }
+                }
+                ListItem(
+                    colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+                    leadingContent = { Icon(Icons.Default.Sync, null) },
+                    headlineContent = { Text("Full sync") },
+                    supportingContent = { Text("A normal sync only fetches what is new. This reads everything again and checks the folder; it also runs by itself once a week.") },
+                    trailingContent = { TextButton(enabled = !s.refreshing, onClick = { vm.refresh(full = true) }) { Text("Sync") } },
+                )
                 ListItem(
                     colors = ListItemDefaults.colors(containerColor = Color.Transparent),
                     leadingContent = { Icon(Icons.Default.History, null) },
@@ -275,9 +388,67 @@ fun SettingsScreen(vm: MainViewModel, onSignIn: () -> Unit, onOpenLog: () -> Uni
 
             Section("About") {
                 Row_(Icons.Default.Info, "RedGrab ${BuildConfig.VERSION_NAME}",
-                    "Unofficial app. Not affiliated with RedGifs.")
+                    "Build ${BuildConfig.VERSION_CODE} · ${BuildConfig.GIT_SHA} · ${BuildConfig.BUILD_DATE}\n" +
+                        "${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL} · Android ${android.os.Build.VERSION.RELEASE}\n" +
+                        "Unofficial app. Not affiliated with RedGifs.")
+                ListItem(
+                    colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+                    modifier = Modifier.clickable {
+                        runCatching { ctx.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(Updater.PAGE))) }
+                    },
+                    leadingContent = { Icon(Icons.Default.Public, null) },
+                    headlineContent = { Text("GitHub") },
+                    supportingContent = { Text(BuildConfig.GITHUB_REPO) },
+                    trailingContent = { Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null) },
+                )
+
+                // Updates from the releases on GitHub.
+                val update by Updater.state.collectAsStateWithLifecycle()
+                val (headline, action) = when (val u = update) {
+                    is Updater.State.Idle -> "Updates" to "Check"
+                    is Updater.State.Checking -> "Checking…" to null
+                    is Updater.State.UpToDate -> "Up to date" to "Check"
+                    is Updater.State.NoRelease -> "No release published yet" to "Check"
+                    is Updater.State.Available -> "Version ${u.release.version} is available" to "Update"
+                    is Updater.State.Downloading -> "Downloading ${u.release.version} · ${u.percent}%" to null
+                    is Updater.State.Ready -> "Version ${u.release.version} is ready" to "Install"
+                    is Updater.State.Installing -> "Installing ${u.release.version}…" to null
+                    is Updater.State.Failed -> u.message to "Try again"
+                }
+                ListItem(
+                    colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+                    leadingContent = { Icon(Icons.Default.Downloading, null) },
+                    headlineContent = { Text(headline) },
+                    supportingContent = {
+                        val notes = (update as? Updater.State.Available)?.release?.notes ?: (update as? Updater.State.Ready)?.release?.notes
+                        Text(notes?.takeIf { it.isNotBlank() }?.lines()?.take(8)?.joinToString("\n") ?: "Last checked: ${Format.ago(vm.library.prefs.lastUpdateCheck)}")
+                    },
+                    trailingContent = {
+                        if (action != null) TextButton(onClick = {
+                            if (update is Updater.State.Available || update is Updater.State.Ready) vm.installUpdate() else vm.checkForUpdate()
+                        }) { Text(action) }
+                    },
+                )
+                SwitchRow(Icons.Default.Sync, "Update automatically",
+                    "Checks when the app opens and twice a day. Installs when the app isn't in use; asks first when it is.",
+                    vm.autoUpdate, onChange = vm::changeAutoUpdate)
+                ListItem(
+                    colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+                    modifier = Modifier.clickable { vm.showChangelog() },
+                    leadingContent = { Icon(Icons.Default.History, null) },
+                    headlineContent = { Text("What's new") },
+                    supportingContent = { Text("Changes in every version.") },
+                )
             }
             Section("Troubleshooting") {
+                ListItem(
+                    colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+                    modifier = Modifier.clickable { reporting = ""; vm.checkRepoVisibility() },
+                    leadingContent = { Icon(Icons.Default.Info, null) },
+                    headlineContent = { Text("Report a problem") },
+                    supportingContent = { Text("Gathers the app and phone details and the recent log.") },
+                    trailingContent = { Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null) },
+                )
                 ListItem(
                     colors = ListItemDefaults.colors(containerColor = Color.Transparent),
                     modifier = Modifier.clickable(onClick = onOpenLog),
@@ -289,9 +460,51 @@ fun SettingsScreen(vm: MainViewModel, onSignIn: () -> Unit, onOpenLog: () -> Uni
                         else Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null)
                     },
                 )
+                // Only for filing a report as a GitHub issue from inside the app. Updates don't need it.
+                var token by remember(vm.githubToken) { mutableStateOf(vm.githubToken) }
+                OutlinedTextField(token, { token = it.trim() }, singleLine = true, label = { Text("GitHub token (private repository only)") },
+                    visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
+                    // A password field to the keyboard too: nothing is learned, suggested or synced.
+                    keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Password, autoCorrectEnabled = false),
+                    supportingText = { Text("Private repository: updates need it (Contents: read). \"Send to GitHub\" needs Issues: read and write.") },
+                    modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 4.dp))
+                Row(Modifier.padding(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (token != vm.githubToken) Button(onClick = { vm.changeGithubToken(token) }) { Text("Save") }
+                    else if (token.isNotEmpty()) OutlinedButton(onClick = { vm.changeGithubToken("") }) { Text("Remove") }
+                }
             }
             Spacer(Modifier.height(24.dp))
         }
+    }
+
+    reporting?.let { text ->
+        AlertDialog(
+            onDismissRequest = { reporting = null },
+            title = { Text("Report a problem") },
+            text = {
+                Column {
+                    OutlinedTextField(text, { reporting = it }, label = { Text("What happened?") }, minLines = 3, maxLines = 6,
+                        modifier = Modifier.fillMaxWidth())
+                    if (vm.githubToken.isNotEmpty() && vm.repoPublic != false) {
+                        Text(if (vm.repoPublic == true) "The repository is public: a report sent to GitHub can be read by anyone. Copy keeps it private."
+                            else "If the repository is public, a report sent to GitHub can be read by anyone.",
+                            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(top = 8.dp))
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    Text("Added automatically:", style = MaterialTheme.typography.labelMedium)
+                    Text(remember { app.redgrab.BugReport.details(ctx) } + "\n+ the recent Activity log (sign-in tokens removed)",
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.height(140.dp).verticalScroll(rememberScrollState()))
+                }
+            },
+            confirmButton = {
+                Row {
+                    TextButton(onClick = { vm.copyReport(text); reporting = null }) { Text("Copy") }
+                    TextButton(enabled = vm.githubToken.isNotEmpty() && !vm.sendingReport, onClick = { vm.sendReport(text); reporting = null }) { Text("Send to GitHub") }
+                }
+            },
+            dismissButton = { TextButton(onClick = { reporting = null }) { Text("Cancel") } },
+        )
     }
 
     newFolder?.let { name ->
@@ -351,5 +564,25 @@ private fun SwitchRow(icon: ImageVector, title: String, body: String, checked: B
         headlineContent = { Text(title) },
         supportingContent = { Text(body) },
         trailingContent = { Switch(checked, onChange, enabled = enabled) },
+    )
+}
+
+/** One setting, shown here and in "Save all": whether syncing and saving many clips may use mobile data. Turning it on asks first. */
+@Composable
+fun MobileDataRow(vm: MainViewModel) {
+    var ask by remember { mutableStateOf(false) }
+    ListItem(
+        colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+        leadingContent = { Icon(Icons.Default.Wifi, null) },
+        headlineContent = { Text("Use mobile data") },
+        supportingContent = { Text(if (vm.mobileData) "Syncing and saving many clips may use mobile data." else "Off: syncing and saving many clips wait for Wi-Fi.") },
+        trailingContent = { Switch(vm.mobileData, { on -> if (on) ask = true else vm.changeMobileData(false) }) },
+    )
+    if (ask) AlertDialog(
+        onDismissRequest = { ask = false },
+        title = { Text("Use mobile data?") },
+        text = { Text("Clips are large. A sync can use several gigabytes.") },
+        confirmButton = { TextButton(onClick = { ask = false; vm.changeMobileData(true) }) { Text("Use mobile data") } },
+        dismissButton = { TextButton(onClick = { ask = false }) { Text("Cancel") } },
     )
 }

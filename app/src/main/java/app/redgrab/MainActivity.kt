@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.offset
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.platform.LocalDensity
@@ -57,6 +58,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -89,6 +91,13 @@ class MainActivity : ComponentActivity() {
         if (it.resultCode == RESULT_OK) vm.refresh()
     }
 
+    private val confirmLock = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+        AppLock.legacyResult(it.resultCode == RESULT_OK)
+    }
+    /** Android's unlock prompt (fingerprint, face, PIN, pattern or password, whatever the phone has). */
+    private fun askIdentity(title: String, onResult: (Boolean) -> Unit = {}) =
+        AppLock.ask(this, title, legacy = { confirmLock.launch(it) }, onResult = onResult)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         installSplashScreen()
         enableEdgeToEdge()
@@ -115,7 +124,11 @@ class MainActivity : ComponentActivity() {
                     }
                 }
                 val snack = remember { SnackbarHostState() }
-                var tab by rememberSaveable { mutableIntStateOf(0) }
+                // Opens on what "Open on" in Settings says: the Saved tab, or Online.
+                var tab by rememberSaveable { mutableIntStateOf(startViewOf(vm.startView).first) }
+                // The tabs visited on the way here, for Back.
+                var tabTrail by rememberSaveable { mutableStateOf(listOf<Int>()) }
+                val goTo: (Int) -> Unit = { next -> if (next != tab) { tabTrail = (tabTrail + tab).takeLast(8); tab = next } }
                 val logVersion by AppLog.version.collectAsStateWithLifecycle()
                 val errorCount by AppLog.errors.collectAsStateWithLifecycle()
                 var seenErrors by rememberSaveable { mutableIntStateOf(0) }
@@ -138,6 +151,13 @@ class MainActivity : ComponentActivity() {
                 val navPx = with(LocalDensity.current) { navPad.toPx() }
                 val gridTab = tab == 0 || tab == 4 // these pad their own scrolling content
                 // The log is opened from Settings; Back returns there.
+                // Back returns to the tab you came from (then to Saved) instead of leaving the app. Screens put their
+                // own Back on top of this (closing a search, leaving a niche). From the Saved tab Back leaves as usual.
+                BackHandler(vm.backToTabs && (tabTrail.isNotEmpty() || tab != 0)) {
+                    val prev = tabTrail.lastOrNull() ?: 0
+                    tabTrail = tabTrail.dropLast(1)
+                    tab = prev
+                }
                 BackHandler(tab == 2) { tab = 3 }
                 val nav = listOf(
                     NavItem(0, "Saved", Icons.Default.Smartphone),
@@ -145,19 +165,21 @@ class MainActivity : ComponentActivity() {
                     NavItem(4, "Online", Icons.Default.Public),
                     NavItem(3, "Settings", Icons.Default.Settings, badge = hasNewErrors),
                 )
-                CompositionLocalProvider(LocalChrome provides chrome, LocalNavPad provides navPad) {
+                LaunchedEffect(vm.appLock) { AppLock.settingChanged(this@MainActivity, vm.appLock) }
+                CompositionLocalProvider(LocalChrome provides chrome, LocalNavPad provides navPad,
+                    app.redgrab.ui.LocalConfirmIdentity provides { title, done -> askIdentity(title, done) }) {
                     Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
                         Box(Modifier.fillMaxSize().padding(bottom = if (gridTab) 0.dp else navPad).consumeWindowInsets(WindowInsets.navigationBars)) {
                             when (tab) {
-                                0 -> LibraryScreen(vm, snack, onSignIn = openSignIn, onOpenSettings = { tab = 3 })
-                                1 -> BrowseScreen(vm, onOpen = { tab = 0 })
+                                0 -> LibraryScreen(vm, snack, onSignIn = openSignIn, onOpenSettings = { goTo(3) })
+                                1 -> BrowseScreen(vm, onOpen = { goTo(0) })
                                 2 -> LogScreen(snack, onBack = { tab = 3 })
-                                4 -> DiscoverScreen(vm, onSignIn = openSignIn)
+                                4 -> DiscoverScreen(vm, onSignIn = openSignIn, onOpenSettings = { goTo(3) })
                                 else -> SettingsScreen(vm, onSignIn = openSignIn, onOpenLog = { tab = 2 }, logHasErrors = hasNewErrors)
                             }
                         }
                         SnackbarHost(snack, Modifier.align(Alignment.BottomCenter).padding(bottom = navPad))
-                        CompactNavBar(nav, selected = if (tab == 2) 3 else tab, systemInset = navInset, onSelect = { tab = it },
+                        CompactNavBar(nav, selected = if (tab == 2) 3 else tab, systemInset = navInset, onSelect = { goTo(it) },
                             modifier = Modifier.align(Alignment.BottomCenter).offset { IntOffset(0, (chrome.hidden * navPx).roundToInt()) })
                     }
                 }
@@ -167,10 +189,16 @@ class MainActivity : ComponentActivity() {
                 vm.player?.let { PlayerScreen(vm, it) }
                 vm.editing?.let { EditorScreen(vm, it) }
                 vm.editingInfo?.let { InfoEditor(vm, it) }
-                LaunchedEffect(vm.facet) { if (vm.facet != null) tab = 0 }
-                LaunchedEffect(vm.discoverRequests) { if (vm.discoverRequests > 0) tab = 4 }
+                // Locked: an opaque cover in this same window, there from the first frame. (The lock screen below is a
+                // window of its own, which also covers open dialogs but takes a moment to appear.)
+                if (AppLock.locked) Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)
+                    .pointerInput(Unit) { awaitPointerEventScope { while (true) awaitPointerEvent().changes.forEach { it.consume() } } })
+                LaunchedEffect(vm.facet) { if (vm.facet != null) goTo(0) }
+                LaunchedEffect(vm.discoverRequests) { if (vm.discoverRequests > 0) goTo(4) }
 
-                vm.shareChoice?.let { (clips, apps) ->
+                // Nothing below is shown while the app is locked: a dialog opened later would lie over the lock screen.
+                val unlocked = !AppLock.locked
+                vm.shareChoice?.takeIf { unlocked }?.let { (clips, apps) ->
                     AlertDialog(
                         onDismissRequest = vm::cancelShareChoice,
                         title = { Text("Share to") },
@@ -184,7 +212,19 @@ class MainActivity : ComponentActivity() {
                     )
                 }
 
-                vm.lastCrash?.let { crash ->
+                vm.whatsNew?.takeIf { unlocked }?.let { app.redgrab.ui.WhatsNewDialog(it, vm::closeWhatsNew) }
+                // Asked once (first use, or first start after the update that brought it); the answer is kept.
+                if (vm.askContentPrefs && vm.whatsNew == null && !AppLock.locked) app.redgrab.ui.ContentPrefsDialog(vm, firstTime = true, onClose = vm::contentPrefsAnswered)
+                // An update that is downloaded is offered once per start; "Later" leaves it in Settings → About.
+                val updateState by Updater.state.collectAsStateWithLifecycle()
+                var updateDeclined by rememberSaveable { mutableIntStateOf(0) }
+                (updateState as? Updater.State.Ready)?.release?.takeIf { it.build != updateDeclined && vm.whatsNew == null && unlocked }?.let { r ->
+                    app.redgrab.ui.UpdateReadyDialog(r, onInstall = { updateDeclined = r.build; vm.installUpdate() }, onLater = { updateDeclined = r.build })
+                }
+                // Last, so it lies over everything else, dialogs included.
+                if (AppLock.locked) app.redgrab.ui.LockScreen(AppLock.asking, onUnlock = { askIdentity("Unlock RedGrab") }, onLeave = { moveTaskToBack(true) })
+
+                vm.lastCrash?.takeIf { unlocked }?.let { crash ->
                     AlertDialog(
                         onDismissRequest = vm::dismissCrash,
                         title = { Text("RedGrab closed unexpectedly") },
@@ -215,6 +255,16 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        // Locked: the unlock prompt comes up by itself once; after a cancel, the Unlock button brings it back.
+        if (AppLock.takeAutoAsk()) askIdentity("Unlock RedGrab")
         vm.onResume()
+    }
+
+    override fun onStart() { super.onStart(); RedGrabApp.inFront = true }
+    override fun onStop() {
+        RedGrabApp.inFront = false
+        // When the app was left: "start in SFW mode" applies only after a real absence.
+        vm.library.prefs.lastLeftAt = System.currentTimeMillis()
+        super.onStop()
     }
 }

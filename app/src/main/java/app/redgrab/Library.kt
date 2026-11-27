@@ -64,10 +64,19 @@ data class Clip(
     fun url(preferHd: Boolean): String? = if (preferHd) hd ?: sd else sd ?: hd
     fun url(q: Quality): String? = when (q) { Quality.HD -> hd; Quality.SD -> sd; Quality.LEGACY -> hd ?: sd }
     val isCopy get() = copyOf != null
-    /** A file you imported from a folder on the phone (not from RedGifs). */
+    /** A file kept in the save folder's "imported" subfolder: one you imported, or a picture saved from online. */
     val imported get() = copyOf == null && copyFile != null
-    /** A picture file (GIF, WebP...) rather than a video; shown with the image viewer. */
-    val isImage get() = copyFile?.substringAfterLast('.', "")?.lowercase() in IMAGE_EXT
+    /**
+     * File type, lower case: of the file on the phone, else of the online address. Reddit's MP4
+     * copies of GIFs keep ".gif" in their address (with "format=mp4"), so those count as MP4.
+     */
+    val fileExt: String by lazy {
+        copyFile?.substringAfterLast('.', "")?.lowercase()
+            ?: hd?.takeIf { "format=mp4" !in it }?.substringBefore('?')?.substringAfterLast('/')?.substringAfterLast('.', "")?.lowercase()
+            ?: ""
+    }
+    /** A picture (GIF, WebP...) rather than a video; shown with the image viewer. Online GIFs count too. */
+    val isImage get() = fileExt in IMAGE_EXT
     /** In your RedGifs likes. */
     val liked get() = "Liked" in sources
 
@@ -86,6 +95,9 @@ data class Clip(
     }
 
     companion object {
+        private val ID_RE = Regex("[a-z0-9_-]{1,80}")
+        /** IDs are used in file names: letters, digits, dash and underscore only. */
+        fun validId(id: String) = ID_RE.matches(id)
         val IMAGE_EXT = setOf("gif", "webp", "png", "jpg", "jpeg")
         val VIDEO_EXT = setOf("mp4", "webm", "m4v", "mov", "mkv")
         fun fromJson(j: JSONObject) = Clip(
@@ -145,9 +157,11 @@ data class EditCopy(val id: String, val originalId: String, val file: String, va
  * A download that didn't work, kept until it succeeds or you delete the clip.
  * [attempts] counts whole runs (each run already retries three times); [first] is when it first failed.
  */
-data class Failure(val reason: String, val first: Long, val last: Long, val attempts: Int) {
-    /** After this many failed runs, or this long, automatic retries stop; you can still retry by hand. */
-    val gaveUp get() = attempts >= MAX_ATTEMPTS || last - first > MAX_AGE_MS
+data class Failure(val reason: String, val first: Long, val last: Long, val attempts: Int,
+                   /** The site says the clip no longer exists: never retried automatically and not counted as a failed download. */
+                   val dead: Boolean = false) {
+    /** After this many failed runs, or this long, automatic retries stop; you can still retry by hand. A dead clip is never retried. */
+    val gaveUp get() = dead || attempts >= MAX_ATTEMPTS || last - first > MAX_AGE_MS
     fun toJson() = JSONObject().put("reason", reason).put("first", first).put("last", last).put("attempts", attempts)
     companion object {
         const val MAX_ATTEMPTS = 5
@@ -167,6 +181,9 @@ data class DownloadProgress(
     val done: Int = 0,
     val failed: Int = 0,
     val currentId: String? = null,
+    /** Bytes of the clip being saved that are on the phone, and its full size (-1 = the server didn't say). */
+    val currentBytes: Long = 0,
+    val currentTotal: Long = -1,
     val bytesPerSec: Long = 0,
     val etaSec: Long = -1,
     val message: String = "",
@@ -204,17 +221,25 @@ data class LibraryState(
     val watched: Set<String> = emptySet(),
     /** Clip IDs with a thumbnail stored on the phone (works offline). */
     val localThumbs: Set<String> = emptySet(),
+    /** Clip IDs with a small preview copy on the phone (see [PreviewMaker]). */
+    val localPreviews: Set<String> = emptySet(),
     /** Files that are byte-for-byte identical to another saved file: file name → the first file with that content. */
     val duplicates: Map<String, String> = emptyMap(),
     /** Clips that arrived in a sync and haven't been opened yet. */
     val unseen: Set<String> = emptySet(),
 ) {
-    val failed: Set<String> get() = failures.keys
+    /** Downloads that failed and may still work. */
+    val failed: Set<String> by lazy { failures.filterValues { !it.dead }.keys }
+    /** Clips the site no longer has (deleted there): listed, but never downloaded again. */
+    val dead: Set<String> by lazy { failures.filterValues { it.dead }.keys }
 
     /** IDs with at least one saved file. Edited copies always count as saved. */
     val saved: Set<String> by lazy { qualities.filterValues { it.isNotEmpty() }.keys + clips.filter { it.isCopy || it.imported }.map { it.id } }
     val originals: List<Clip> by lazy { clips.filter { !it.isCopy } }
-    val newCount get() = originals.count { it.id !in saved }
+    /** Clips that can still be saved: not on the phone, and not deleted on their site. */
+    /** Clips waiting to be saved: not on the phone, and not deleted on their site or set aside. */
+    val pending: List<Clip> get() = originals.filter { it.id !in saved && it.id !in dead }
+    val newCount get() = originals.count { it.id !in saved && it.id !in dead }
     val savedCount get() = originals.count { it.id in saved }
 }
 
@@ -229,6 +254,7 @@ class Library(private val ctx: Context) {
     private val db = AppDb.open(ctx)
     private val store = db.store()
     private val thumbDir = File(ctx.filesDir, "thumbs")
+    private val previewDir = File(ctx.filesDir, "previews")
     /** Saved file name → (size in bytes, SHA-256), recorded when a download finishes. */
     private var fileIndex: Map<String, Pair<Long, String>> = emptyMap()
     private val refreshLock = Mutex()
@@ -263,6 +289,7 @@ class Library(private val ctx: Context) {
             raw = store.clips(ClipRow.LIBRARY).map { it.toClip() }
             extras = store.clips(ClipRow.EXTRA).map { it.toClip() }
             imports = store.clips(ClipRow.IMPORTED).map { it.toClip() }
+            extras.forEach { if (OnlineSource.of(it.id) == OnlineSource.FikFap) SourceHeaders.learnFikFap(it.hd) }
             overrides = store.overrides().associate { it.id to it.toOverride() }
             copies = store.copies().map { it.toCopy() }
             hidden = store.hidden().toSet()
@@ -270,13 +297,14 @@ class Library(private val ctx: Context) {
             fileIndex = store.files().associate { it.name to (it.size to it.sha) }
             _state.value = LibraryState(
                 clips = compose(), qualities = readHistory(), lastSynced = prefs.lastSynced,
-                failures = store.failures().associate { it.id to Failure(it.reason, it.firstAt, it.lastAt, it.attempts) },
+                failures = store.failures().associate { it.id to Failure(it.reason, it.firstAt, it.lastAt, it.attempts, it.dead) },
                 history = store.syncs().map { SyncRecord(it.time, it.total, it.added, it.removed, it.saved) },
                 performers = store.performers().associate { it.key to it.toPerformer() },
                 hidden = hidden,
                 collections = store.collections().map { RgCollection(it.id, it.name, it.count, it.thumb) },
                 watched = store.watched().toSet(),
                 localThumbs = thumbDir.list()?.mapTo(HashSet()) { it.removeSuffix(".jpg") } ?: emptySet(),
+                localPreviews = previewDir.list()?.filter { it.endsWith(".mp4") }?.mapTo(HashSet()) { it.removeSuffix(".mp4") } ?: emptySet(),
                 duplicates = findDuplicates(),
                 unseen = store.unseen().toSet(),
             )
@@ -321,12 +349,20 @@ class Library(private val ctx: Context) {
         copyOf = e.originalId, copyFile = e.file, copyNote = e.note,
     )
 
-    private fun recompose() { val clips = synchronized(lock) { compose() }; _state.update { it.copy(clips = clips) } }
 
     // ---- refresh -------------------------------------------------------------
 
     /** Re-reads likes and collections from RedGifs and re-checks the folder. */
-    suspend fun refresh(): Result<Unit> = refreshLock.withLock {
+    /** Syncs with RedGifs. Quick unless [full] is asked for or due (see [SyncPlan]). */
+    suspend fun refresh(full: Boolean = false): Result<Unit> = refreshLock.withLock {
+        // A session that has run out, or is about to, is renewed out of sight first.
+        if (prefs.signedIn && Session.state(prefs).let { it == Session.State.Expired || it == Session.State.ExpiringSoon }) SessionRenewer.renew(ctx)
+        val first = sync(full)
+        // RedGifs turned the session down mid-way (it also does when the network changed): renew once and start over.
+        if (first.exceptionOrNull() is AuthException && SessionRenewer.renew(ctx)) sync(full) else first
+    }
+
+    private suspend fun sync(asked: Boolean): Result<Unit> =
         withContext(Dispatchers.IO) {
             val token = prefs.token
             val ua = prefs.userAgent
@@ -341,25 +377,53 @@ class Library(private val ctx: Context) {
                 }
                 var likedTotal = 0
                 val extras = FeedExtras()
-                api.likedClips(extras) { p, pages, total ->
+                val before0 = synchronized(lock) { raw }
+                val started = System.currentTimeMillis()
+                // Everything, or only what is new? (See SyncPlan.)
+                val full = SyncPlan.needsFull(asked, prefs.lastFullSync, started, before0.size)
+                suspend fun allLikes() = api.likedClips(extras) { p, pages, total ->
                     likedTotal = total
                     status("Reading likes… page $p${if (pages > 0) " of $pages" else ""}")
-                }.forEach(::add)
+                }
+                var likesReadInFull = full
+                val likes = if (full) allLikes() else {
+                    val known = before0.filter { it.liked }.map { it.copy(sources = setOf("Liked"), colIds = emptySet()) }
+                    val top = api.likedClips(extras, known.mapTo(HashSet()) { it.id }) { _, _, total -> likedTotal = total; status("Checking for new likes…") }
+                    // The site's count has to agree with what was found; if not (something was unliked), read them all.
+                    SyncPlan.mergeLikes(known, top, likedTotal, prefs.likedSiteTotal) ?: run { likesReadInFull = true; allLikes() }
+                }
+                likes.forEach(::add)
+                val likedSiteTotal = likedTotal
                 if (likedTotal == 0) likedTotal = merged.size
 
+                var collectionsRead = 0
+                var collectionsTotal = 0
                 if (prefs.includeCollections) {
                     val cols = api.myCollections()
+                    collectionsTotal = cols.size
                     val counted = ArrayList<RgCollection>()
+                    val countsBefore = prefs.collectionCounts
+                    val countsNow = HashMap<String, Int>()
                     for ((i, c) in cols.withIndex()) {
-                        status("Reading collection ${i + 1} of ${cols.size}: ${c.name}")
-                        val inIt = api.collectionClips(c, extras)
+                        val members = before0.filter { c.id in it.colIds }
+                        // A collection with the same number of clips as when it was last read is taken as it is.
+                        val inIt = if (!full && SyncPlan.collectionUnchanged(c.count, countsBefore[c.id], members.size))
+                            members.map { it.copy(sources = setOf(c.name), colIds = setOf(c.id)) }
+                        else {
+                            status("Reading collection ${i + 1} of ${cols.size}: ${c.name}")
+                            collectionsRead++
+                            api.collectionClips(c, extras)
+                        }
+                        countsNow[c.id] = c.count
                         inIt.forEach(::add)
                         counted += c.copy(count = inIt.size, thumb = c.thumb ?: inIt.firstOrNull()?.thumb)
                     }
+                    prefs.collectionCounts = countsNow
                     saveCollections(counted)
                     _state.update { it.copy(collections = counted) }
-                    AppLog.i("Collections: ${cols.size}")
                 }
+                AppLog.i((if (full) "Full sync" else "Quick sync") + ": likes " + (if (likesReadInFull) "read in full" else "checked from the top") +
+                    ", $collectionsRead of $collectionsTotal collection(s) read")
 
                 // Niche names: from the responses, then look up the rest (once; they're kept).
                 val names = HashMap(nicheNames).apply { putAll(extras.niches) }
@@ -377,9 +441,12 @@ class Library(private val ctx: Context) {
                     _state.value.performers + extras.performers
                 }
 
-                status("Checking folder…")
-                val scan = scanFolderFull()
+                // The folder is listed in a full pass; in between, the record of what the app saved is used.
+                val scan = if (full) { status("Checking folder…"); scanFolderFull().also { prefs.lastFolderScan = System.currentTimeMillis() } }
+                    else _state.value.let { it.qualities to it.partial }
                 val now = System.currentTimeMillis()
+                if (full) prefs.lastFullSync = now
+                if (likedSiteTotal > 0) prefs.likedSiteTotal = likedSiteTotal
                 var savedCount = 0
                 // Swap in the new list and read the download history in one step, so clips saved
                 // by a download running during this sync aren't lost.
@@ -420,7 +487,6 @@ class Library(private val ctx: Context) {
                 Result.failure(e)
             }
         }
-    }
 
     private fun status(msg: String) = _state.update { it.copy(refreshMessage = msg) }
 
@@ -533,10 +599,19 @@ class Library(private val ctx: Context) {
 
     fun rescan() {
         val (q, parts) = scanFolderFull()
+        prefs.lastFolderScan = System.currentTimeMillis()
         synchronized(lock) { val merged = mergeQ(readHistory(), q); _state.update { it.copy(qualities = merged, partial = parts) } }
     }
 
     fun setPartial(id: String, has: Boolean) = _state.update { it.copy(partial = if (has) it.partial + id else it.partial - id) }
+
+    /** Deletes what a download left unfinished for [id] and clears its "incomplete" mark (the clip is deleted on its site, or set aside). */
+    fun dropPartial(id: String) {
+        Quality.entries.forEach { q ->
+            fileUri("$id${q.suffix}.part")?.takeIf(::exists)?.let { runCatching { android.provider.DocumentsContract.deleteDocument(ctx.contentResolver, it) } }
+        }
+        setPartial(id, false)
+    }
 
     fun folder(): DocumentFile? {
         val uri: Uri = prefs.folderUri ?: return null
@@ -545,6 +620,8 @@ class Library(private val ctx: Context) {
 
     /** Content URI for a file in the save folder, built without listing the folder (fast). */
     fun fileUri(name: String): Uri? {
+        // Names stay inside the save folder ("imported/<file>" is the only subfolder used).
+        if (name.isEmpty() || name.startsWith("/") || '\\' in name || name.split('/').any { it == ".." || it == "." }) return null
         val folder = prefs.folderUri ?: return null
         return runCatching {
             val parentId = if (DocumentsContract.isDocumentUri(ctx, folder)) DocumentsContract.getDocumentId(folder)
@@ -562,11 +639,13 @@ class Library(private val ctx: Context) {
      * when there is one, because several previews decode at once), otherwise the SD stream when
      * [allowStream] is on. Second value: true = local file.
      */
-    fun previewSource(c: Clip, allowStream: Boolean): Pair<Uri, Boolean>? {
-        c.copyFile?.let { f -> return fileUri(f)?.takeIf(::exists)?.let { it to true } }
+    fun previewSource(c: Clip, allowStream: Boolean, verify: Boolean = true): Pair<Uri, Boolean>? {
+        // [verify] = false trusts the library's record of what is saved instead of asking the storage provider.
+        fun there(u: Uri) = !verify || exists(u)
+        c.copyFile?.let { f -> return fileUri(f)?.takeIf(::there)?.let { it to true } }
         val have = _state.value.qualities[c.id] ?: emptySet()
         for (q in listOf(Quality.SD, Quality.HD, Quality.LEGACY)) {
-            if (q in have) fileUri(q.fileName(c.id))?.takeIf(::exists)?.let { return it to true }
+            if (q in have) fileUri(q.fileName(c.id))?.takeIf(::there)?.let { return it to true }
         }
         if (!allowStream) return null
         return (c.sd ?: c.hd)?.let { Uri.parse(it) to false }
@@ -594,11 +673,11 @@ class Library(private val ctx: Context) {
     }
 
     /** Records a failed download with a plain-language reason. */
-    fun markFailed(id: String, reason: String) = synchronized(lock) {
+    fun markFailed(id: String, reason: String, dead: Boolean = false) = synchronized(lock) {
         val now = System.currentTimeMillis()
         val old = _state.value.failures[id]
-        val f = Failure(reason, old?.first ?: now, now, (old?.attempts ?: 0) + 1)
-        store.putFailures(listOf(FailureRow(id, f.reason, f.first, f.last, f.attempts)))
+        val f = Failure(reason, old?.first ?: now, now, (old?.attempts ?: 0) + 1, dead)
+        store.putFailures(listOf(FailureRow(id, f.reason, f.first, f.last, f.attempts, f.dead)))
         _state.update { it.copy(failures = it.failures + (id to f)) }
     }
 
@@ -739,7 +818,8 @@ class Library(private val ctx: Context) {
         val known = raw.any { it.id == c.id } || extras.any { it.id == c.id }
         if (known && !wasHidden) return@synchronized
         if (!known) {
-            extras = extras + c.copy(sources = setOf("Discover"))
+            // Keeps where it was found ("Reddit", "FikFap"); RedGifs clips are "Discover".
+            extras = extras + c.copy(sources = c.sources.filterTo(LinkedHashSet()) { it in OnlineSource.SAVED_LABELS }.ifEmpty { setOf("Discover") })
             store.putClips(listOf(ClipRow.of(extras.last(), ClipRow.EXTRA, (store.clips(ClipRow.EXTRA).lastOrNull()?.pos ?: -1) + 1)))
         }
         val clips = compose()
@@ -764,6 +844,9 @@ class Library(private val ctx: Context) {
     }
 
     fun override(id: String): MetaOverride? = synchronized(lock) { overrides[id] }
+
+    /** Puts a clip in one of your categories, keeping its other edits. */
+    fun setCategory(id: String, category: String) = setOverrides(mapOf(id to (override(id) ?: MetaOverride()).copy(category = category.trim())))
 
     // ---- edited copies -------------------------------------------------------------
 
@@ -827,9 +910,35 @@ class Library(private val ctx: Context) {
         _state.update { it.copy(clips = clips) }
     }
 
+    /**
+     * Fills in a clip's size, length and whether it has sound from its saved file, for clips
+     * whose site didn't say (FikFap gives no size, Reddit no length for GIFs).
+     */
+    fun learnFromFile(id: String, file: Uri) {
+        val c = synchronized(lock) { extras.firstOrNull { it.id == id } } ?: return
+        if (c.width > 0 && c.height > 0 && c.duration > 0) return
+        runCatching {
+            val r = android.media.MediaMetadataRetriever()
+            try {
+                r.setDataSource(ctx, file)
+                fun num(key: Int) = r.extractMetadata(key)?.toLongOrNull() ?: 0L
+                var w = num(android.media.MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH).toInt()
+                var h = num(android.media.MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT).toInt()
+                // A video stored sideways is shown turned: swap so the tile gets the shape you see.
+                if (num(android.media.MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION).toInt() % 180 != 0) w = h.also { h = w }
+                val sized = c.width > 0 && c.height > 0
+                replaceClip(c.copy(
+                    width = if (sized) c.width else w, height = if (sized) c.height else h,
+                    duration = if (c.duration > 0) c.duration else num(android.media.MediaMetadataRetriever.METADATA_KEY_DURATION) / 1000.0,
+                    hasAudio = r.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_HAS_AUDIO) == "yes",
+                ))
+            } finally { r.release() }
+        }.onFailure { AppLog.w("Could not read size and length of $id: ${it.message}") }
+    }
+
     // ---- thumbnails stored on the phone (so the library works offline) ---------------
 
-    fun thumbFile(id: String) = File(thumbDir, "$id.jpg")
+    fun thumbFile(id: String) = File(thumbDir, id.replace(UNSAFE_NAME, "_") + ".jpg")
 
     /** Saves a still frame of a saved video as its thumbnail. Returns true on success. */
     fun makeThumb(id: String, video: Uri): Boolean = runCatching {
@@ -842,7 +951,7 @@ class Library(private val ctx: Context) {
             val bmp = (if (android.os.Build.VERSION.SDK_INT >= 27)
                 r.getScaledFrameAtTime(at, android.media.MediaMetadataRetriever.OPTION_CLOSEST_SYNC, 480, 480)
             else r.getFrameAtTime(at)) ?: return@runCatching false
-            val tmp = File(thumbDir, "$id.tmp")
+            val tmp = File(thumbFile(id).path + ".tmp")
             tmp.outputStream().use { bmp.compress(android.graphics.Bitmap.CompressFormat.JPEG, 82, it) }
             bmp.recycle()
             tmp.renameTo(thumbFile(id))
@@ -865,8 +974,32 @@ class Library(private val ctx: Context) {
     }
 
     private fun dropThumbs(ids: kotlin.collections.Collection<String>) {
-        ids.forEach { thumbFile(it).delete() }
-        _state.update { it.copy(localThumbs = it.localThumbs - ids.toSet()) }
+        ids.forEach { thumbFile(it).delete(); previewFile(it).delete() }
+        _state.update { it.copy(localThumbs = it.localThumbs - ids.toSet(), localPreviews = it.localPreviews - ids.toSet()) }
+    }
+
+    // ---- small preview copies for the grid (made by PreviewMaker) ----------------------------
+
+    fun previewFile(id: String) = File(previewDir, id.replace(UNSAFE_NAME, "_") + ".mp4")
+
+    /** The small preview copy of a clip, if the setting is on and one has been made. */
+    fun previewCopy(c: Clip): Uri? =
+        if (prefs.previewCopies && c.id in _state.value.localPreviews) Uri.fromFile(previewFile(c.id)) else null
+
+    fun notePreview(id: String) = _state.update { it.copy(localPreviews = it.localPreviews + id) }
+
+    /** Forgets a copy that wouldn't play; the clip plays from its own file again. */
+    fun dropPreview(id: String) {
+        previewFile(id).delete()
+        _state.update { it.copy(localPreviews = it.localPreviews - id) }
+    }
+
+    /** Bytes used by the preview copies. */
+    fun previewBytes(): Long = previewDir.listFiles()?.sumOf { it.length() } ?: 0L
+
+    fun clearPreviews() {
+        previewDir.listFiles()?.forEach { it.delete() }
+        _state.update { it.copy(localPreviews = emptySet()) }
     }
 
     // ---- "New": clips that arrived in a sync and haven't been opened ------------------------
@@ -896,7 +1029,7 @@ class Library(private val ctx: Context) {
         val opts = android.graphics.BitmapFactory.Options().apply { inSampleSize = sample }
         val bmp = ctx.contentResolver.openInputStream(image)!!.use { android.graphics.BitmapFactory.decodeStream(it, null, opts) }
             ?: return@runCatching null
-        val tmp = File(thumbDir, "$id.tmp")
+        val tmp = File(thumbFile(id).path + ".tmp")
         tmp.outputStream().use { bmp.compress(android.graphics.Bitmap.CompressFormat.JPEG, 82, it) }
         bmp.recycle()
         tmp.renameTo(thumbFile(id))
@@ -972,7 +1105,12 @@ class Library(private val ctx: Context) {
      * Lists every file in the "imported" subfolder that the library doesn't know yet (after an
      * import, or files you put there yourself). Returns how many were added.
      */
-    fun adoptImported(progress: (String) -> Unit = {}): Int {
+    fun adoptImported(progress: (String) -> Unit = {}): Int = synchronized(importLock) { adoptNewFiles(progress) }
+
+    /** Held while files in "imported" are listed or added, so a file is never listed twice. */
+    private val importLock = Any()
+
+    private fun adoptNewFiles(progress: (String) -> Unit): Int {
         val dir = importedDir(create = false) ?: return 0
         val tree = prefs.folderUri ?: return 0
         val known = synchronized(lock) { imports.mapNotNullTo(HashSet()) { it.copyFile } }
@@ -1021,6 +1159,85 @@ class Library(private val ctx: Context) {
         return added
     }
 
+    /**
+     * Saves a file found online that keeps its own type (a sex.com GIF, a 4chan WebM) into the
+     * "imported" subfolder as `<id>.<type>` and lists it in the library with its title and
+     * tags. [urls] are tried in order; the first that turns out to be a real picture or video
+     * is kept.
+     */
+    fun addOnlineFile(c: Clip, http: okhttp3.OkHttpClient, urls: List<String>, onProgress: (Long, Long) -> Unit = { _, _ -> }) {
+        require(Clip.validId(c.id)) { "Bad clip ID" }
+        if (synchronized(lock) { imports.any { it.id == c.id } }) return
+        val dir = importedDir(create = true) ?: error("Choose a save folder first")
+        val resolver = ctx.contentResolver
+        var failure: Exception? = null
+        for (url in urls) {
+            val ext = url.substringBefore('?').substringAfterLast('.', "").lowercase().takeIf { it in Clip.IMAGE_EXT || it in Clip.VIDEO_EXT } ?: continue
+            val name = "${c.id}.$ext"
+            dir.findFile("$name.part")?.delete()
+            val part = dir.createFile("application/octet-stream", "$name.part") ?: error("Could not create file in folder")
+            try {
+                RedGifsApi.download(http, url).use { r ->
+                    if (r.header("Content-Length") == "0" || r.body?.contentType()?.type == "text") throw java.io.IOException("Not a media file")
+                    val total = r.body!!.contentLength()
+                    resolver.openOutputStream(part.uri, "wt")!!.use { out ->
+                        val input = r.body!!.byteStream()
+                        val buf = ByteArray(64 * 1024)
+                        var done = 0L
+                        while (true) {
+                            val n = input.read(buf)
+                            if (n < 0) break
+                            out.write(buf, 0, n)
+                            done += n
+                            onProgress(done, total)
+                        }
+                    }
+                }
+                // Reading its size doubles as the check that the file is what it says; also makes the offline thumbnail.
+                var duration = 0.0
+                var audio = false
+                val size = if (ext in Clip.IMAGE_EXT) makeImageThumb(c.id, part.uri) ?: throw java.io.IOException("Not a picture")
+                else {
+                    val r = android.media.MediaMetadataRetriever()
+                    try {
+                        r.setDataSource(ctx, part.uri)
+                        fun num(key: Int) = r.extractMetadata(key)?.toLongOrNull() ?: 0L
+                        duration = num(android.media.MediaMetadataRetriever.METADATA_KEY_DURATION) / 1000.0
+                        audio = r.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_HAS_AUDIO) == "yes"
+                        if (r.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_HAS_VIDEO) != "yes" || duration <= 0) throw java.io.IOException("Not a playable video")
+                        var w = num(android.media.MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH).toInt()
+                        var h = num(android.media.MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT).toInt()
+                        if (num(android.media.MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION).toInt() % 180 != 0) w = h.also { h = w }
+                        w to h
+                    } catch (e: RuntimeException) {
+                        throw java.io.IOException("Not a playable video")
+                    } finally { r.release() }.also { makeThumb(c.id, part.uri) }
+                }
+                synchronized(importLock) {
+                    val done = DocumentsContract.renameDocument(resolver, part.uri, name) ?: error("Could not rename the finished file")
+                    val finalName = DocumentFile.fromSingleUri(ctx, done)?.name ?: name
+                    val clip = c.copy(sd = null, width = size.first, height = size.second, hasAudio = audio, duration = duration,
+                        created = c.created.takeIf { it > 0 } ?: (System.currentTimeMillis() / 1000),
+                        sources = c.sources.ifEmpty { setOf(OnlineSource.of(c.id).label) }, copyFile = "$IMPORT_DIR/$finalName")
+                    synchronized(lock) {
+                        imports = imports + clip
+                        store.putClips(listOf(ClipRow.of(clip, ClipRow.IMPORTED, (store.clips(ClipRow.IMPORTED).lastOrNull()?.pos ?: -1) + 1)))
+                        val all = compose()
+                        _state.update { it.copy(clips = all) }
+                    }
+                }
+                AppLog.i("Saved ${c.id} as $IMPORT_DIR/$name (${c.tags.size} tag(s))")
+                return
+            } catch (e: Exception) {
+                failure = e
+                runCatching { part.delete() }
+                dropThumbs(listOf(c.id))
+                AppLog.w("Could not save ${c.id} as .$ext: ${e.message}")
+            }
+        }
+        throw failure ?: java.io.IOException("No file address")
+    }
+
     // ---- auto-sync: watched collections ------------------------------------------------
 
     fun setWatched(key: String, on: Boolean) = synchronized(lock) {
@@ -1054,7 +1271,6 @@ class Library(private val ctx: Context) {
         _state.update { it.copy(duplicates = dups) }
     }
 
-    fun indexed(name: String): Pair<Long, String>? = synchronized(lock) { fileIndex[name] }
 
     private fun forgetFiles(names: kotlin.collections.Collection<String>) {
         if (names.none { it in fileIndex }) return
@@ -1084,6 +1300,28 @@ class Library(private val ctx: Context) {
         val inLibrary = raw.mapTo(HashSet()) { it.id }
         store.clearClips(ClipRow.EXTRA)
         store.putClips(extras.filter { it.id !in inLibrary }.mapIndexed { i, c -> ClipRow.of(c, ClipRow.EXTRA, i) })
+    }
+
+    /** A collection created from the app: listed straight away, without waiting for a sync. */
+    fun addCollection(c: RgCollection) = synchronized(lock) {
+        val list = _state.value.collections
+        if (list.any { it.id == c.id }) return@synchronized
+        saveCollections(list + c)
+        _state.update { it.copy(collections = list + c) }
+    }
+
+    /**
+     * Notes that a clip was added to one of your RedGifs collections, so it shows there before the
+     * next sync confirms it.
+     */
+    fun noteInCollection(clipId: String, col: RgCollection) = synchronized(lock) {
+        fun mark(c: Clip) = if (c.id == clipId && col.id !in c.colIds) c.copy(sources = c.sources + col.name, colIds = c.colIds + col.id) else c
+        raw = raw.map(::mark)
+        if (extras.any { it.id == clipId }) { extras = extras.map(::mark); saveExtras() }
+        val cols = _state.value.collections.map { if (it.id == col.id) it.copy(count = it.count + 1) else it }
+        saveCollections(cols)
+        val clips = compose()
+        _state.update { it.copy(clips = clips, collections = cols) }
     }
 
     private fun saveCollections(list: List<RgCollection>) = tx {
@@ -1117,8 +1355,8 @@ class Library(private val ctx: Context) {
                 JSONObject(f.readText()).let { j -> j.keys().asSequence().toList().map { make(it, j) } }
             fun lines(f: File): List<String> = f.readLines().map { it.trim() }.filter { it.isNotEmpty() }
 
-            val lib = read("library.json") { f -> array(f).map(Clip::fromJson) }.distinctBy { it.id }
-            val ext = read("extras.json") { f -> array(f).map(Clip::fromJson) }.distinctBy { it.id }
+            val lib = read("library.json") { f -> array(f).map(Clip::fromJson) }.filter { Clip.validId(it.id) }.distinctBy { it.id }
+            val ext = read("extras.json") { f -> array(f).map(Clip::fromJson) }.filter { Clip.validId(it.id) }.distinctBy { it.id }
             val ovr = read("overrides.json") { f -> obj(f) { k, j -> OverrideRow.of(k, MetaOverride.fromJson(j.getJSONObject(k))) } }
             val cps = read("copies.json") { f -> array(f).map { CopyRow.of(EditCopy.fromJson(it)) } }
             val hid = read("hidden.txt") { f -> lines(f).map(::HiddenRow) }
@@ -1165,7 +1403,10 @@ class Library(private val ctx: Context) {
     }
 
     companion object {
+        /** Why a clip you chose not to download ("Don't save these") is set aside. */
+        const val SKIPPED = "Set aside by you"
         private val EDIT_RE = Regex(".+-edit-[0-9]+")
+        private val UNSAFE_NAME = Regex("[^A-Za-z0-9_-]")
         /** Subfolder of the save folder that holds imported files. */
         const val IMPORT_DIR = "imported"
         private val LEGACY_FILES = listOf("library.json", "extras.json", "overrides.json", "copies.json", "hidden.txt",

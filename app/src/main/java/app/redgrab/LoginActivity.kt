@@ -56,6 +56,8 @@ import kotlin.coroutines.resume
  * captcha); the app only reads the resulting session token afterwards.
  */
 class LoginActivity : ComponentActivity() {
+    /** Host of the page the browser view is showing. */
+    private var pageHost by androidx.compose.runtime.mutableStateOf("")
 
     companion object {
         /** Open in "renew" mode: close automatically once a fresh token shows up. */
@@ -64,7 +66,18 @@ class LoginActivity : ComponentActivity() {
 
     /** Last bearer token seen on a request to api.redgifs.com. */
     @Volatile private var seenToken: String? = null
+    /** True while the page shown is on redgifs.com (tokens are only read then). */
+    @Volatile private var onRedgifs = false
+
+    private fun isRedgifs(url: String?): Boolean {
+        val u = runCatching { android.net.Uri.parse(url ?: "") }.getOrNull() ?: return false
+        val host = u.host?.lowercase() ?: return false
+        return u.scheme == "https" && (host == "redgifs.com" || host.endsWith(".redgifs.com"))
+    }
     private var web: WebView? = null
+
+    /** Locked while this screen was out of sight: back to the main screen, which asks you to unlock. */
+    override fun onStart() { super.onStart(); if (AppLock.locked) finish() }
 
     @OptIn(ExperimentalMaterial3Api::class)
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -93,7 +106,8 @@ class LoginActivity : ComponentActivity() {
                 Scaffold(
                     topBar = {
                         TopAppBar(
-                            title = { Text("Sign in to RedGifs") },
+                            // The address of the page on show, so a page that isn't RedGifs can be told apart.
+                            title = { androidx.compose.foundation.layout.Column { Text("Sign in to RedGifs"); if (pageHost.isNotEmpty()) Text(pageHost, style = MaterialTheme.typography.labelSmall) } },
                             navigationIcon = {
                                 IconButton(onClick = { finish() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Close") }
                             },
@@ -150,13 +164,19 @@ class LoginActivity : ComponentActivity() {
     private fun createWebView(ctx: android.content.Context, onProgress: (Int) -> Unit, onNav: (Boolean) -> Unit): WebView {
         val w = WebView(ctx)
         web = w
+        // Without this the page is told the screen has no height (Android does that for a browser
+        // view that "wraps its content"), and sites laid out to fill the screen, like RedGifs, show nothing.
+        w.layoutParams = android.view.ViewGroup.LayoutParams(android.view.ViewGroup.LayoutParams.MATCH_PARENT, android.view.ViewGroup.LayoutParams.MATCH_PARENT)
         CookieManager.getInstance().setAcceptCookie(true)
         CookieManager.getInstance().setAcceptThirdPartyCookies(w, true)
         w.settings.javaScriptEnabled = true
         w.settings.domStorageEnabled = true
+        // A web page has no business reading files or other apps' content.
+        w.settings.allowFileAccess = false
+        w.settings.allowContentAccess = false
         w.webViewClient = object : WebViewClient() {
             override fun shouldInterceptRequest(view: WebView, req: WebResourceRequest): WebResourceResponse? {
-                if (req.url.host == "api.redgifs.com") {
+                if (onRedgifs && req.url.host == "api.redgifs.com") {
                     req.requestHeaders.entries
                         .firstOrNull { it.key.equals("Authorization", ignoreCase = true) }
                         ?.value?.removePrefix("Bearer ")?.trim()
@@ -166,7 +186,14 @@ class LoginActivity : ComponentActivity() {
                 return null
             }
 
+            override fun onPageStarted(view: WebView, url: String?, favicon: android.graphics.Bitmap?) {
+                pageHost = runCatching { android.net.Uri.parse(url).host }.getOrNull().orEmpty()
+                onRedgifs = isRedgifs(url)
+                if (!onRedgifs) seenToken = null // a token seen earlier doesn't carry over to another site
+            }
+
             override fun doUpdateVisitedHistory(view: WebView, url: String?, isReload: Boolean) {
+                onRedgifs = isRedgifs(url)
                 onNav(view.canGoBack())
             }
 
@@ -194,18 +221,24 @@ class LoginActivity : ComponentActivity() {
     /** Returns an error message to show, or null after a successful sign-in (screen closes). */
     private suspend fun tryToken(quiet: Boolean): String? {
         val w = web ?: return "Page not ready yet."
-        // Where the site keeps its token (from its own JS): sessionStorage.auth_token,
-        // or JSON {data:{access_token}} under "auth_data" in local/session storage.
+        // Another site's page could hold a token of its own choosing: only redgifs.com counts.
+        if (!isRedgifs(w.url)) return "Finish signing in on redgifs.com, then tap Done."
+        // Where the site keeps its token. Seen on the site (2026-11): JSON {token} under
+        // "session_data" in localStorage. Older places are still looked at: sessionStorage.auth_token,
+        // and JSON {data:{access_token}} under "auth_data". Every one found is tried.
         val js = """
             (function(){
-              function fromAuthData(s){ try { var j = JSON.parse(s.getItem('auth_data')||'null');
-                return j && j.data && j.data.access_token || null; } catch(e){ return null; } }
-              return sessionStorage.getItem('auth_token') || fromAuthData(localStorage) || fromAuthData(sessionStorage) || null;
+              function at(s, key, path){ try { var j = JSON.parse(s.getItem(key)||'null');
+                for (var i = 0; i < path.length && j; i++) j = j[path[i]];
+                return typeof j === 'string' ? j : null; } catch(e){ return null; } }
+              var found = [at(localStorage,'session_data',['token']), at(sessionStorage,'session_data',['token']),
+                sessionStorage.getItem('auth_token'), at(localStorage,'auth_data',['data','access_token']), at(sessionStorage,'auth_data',['data','access_token'])];
+              return JSON.stringify(found.filter(function(t){ return !!t; }));
             })()
         """.trimIndent()
         val raw = suspendCancellableCoroutine { cont -> w.evaluateJavascript(js) { cont.resume(it) } }
-        val stored = runCatching { JSONTokener(raw).nextValue() as? String }.getOrNull()
-        val candidates = listOfNotNull(stored, seenToken).distinct()
+        val stored = runCatching { org.json.JSONArray(JSONTokener(raw).nextValue() as String).strings() }.getOrDefault(emptyList())
+        val candidates = (stored + listOfNotNull(seenToken)).distinct()
         val ua = w.settings.userAgentString
         val good = withContext(Dispatchers.IO) {
             candidates.firstOrNull { t ->

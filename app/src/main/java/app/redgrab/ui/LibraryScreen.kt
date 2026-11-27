@@ -27,6 +27,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.lazy.staggeredgrid.LazyVerticalStaggeredGrid
 import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridCells
 import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridItemSpan
@@ -40,6 +41,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.LinkOff
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.DoneAll
@@ -124,6 +126,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.clickable
+import kotlinx.coroutines.flow.first
 import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.LocalMinimumInteractiveComponentSize
 import androidx.compose.runtime.CompositionLocalProvider
@@ -167,7 +171,7 @@ fun LibraryScreen(vm: MainViewModel, snack: SnackbarHostState, onSignIn: () -> U
     val has = remember(s.clips, s.watched, s.collections) {
         mapOf(
             Origin.Collections to s.collections.isNotEmpty(), Origin.Synced to s.watched.isNotEmpty(),
-            Origin.Imported to s.clips.any { it.imported }, Origin.Online to s.clips.any { "Discover" in it.sources },
+            Origin.Imported to s.clips.any { Origin.Imported.matches(s, it) }, Origin.Online to s.clips.any { Origin.Online.matches(s, it) },
         )
     }
     var colMenu by remember { mutableStateOf(false) }
@@ -200,7 +204,26 @@ fun LibraryScreen(vm: MainViewModel, snack: SnackbarHostState, onSignIn: () -> U
     val newHere = counts[0]; val savedHere = counts[1]; val hdHere = counts[2]; val sdHere = counts[3]; val editedHere = counts[4]
 
     // One layout for both modes: "Grid" gives every tile the same shape, "Wall" each clip's own.
-    val gridState = rememberLazyStaggeredGridState()
+    // Kept in the view model, so the position survives a visit to another tab.
+    val gridState = vm.savedGrid
+    val shownIds = remember(shown) { shown.map { it.id } }
+    val spot = followClipView(vm, gridState, shownIds)
+    // Coming back after the app was closed: return to the clip that was at the top when it was left.
+    LaunchedEffect(Unit) {
+        if (!vm.restoreSavedTop) return@LaunchedEffect
+        vm.restoreSavedTop = false
+        val at = shownIds.indexOf(vm.library.prefs.savedTop ?: return@LaunchedEffect)
+        if (at <= 0) return@LaunchedEffect
+        val total = androidx.compose.runtime.snapshotFlow { gridState.layoutInfo.totalItemsCount }.first { it >= shownIds.size }
+        gridState.scrollToItem((total - shownIds.size).coerceAtLeast(0) + at)
+    }
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    androidx.compose.runtime.DisposableEffect(lifecycleOwner) {
+        fun remember() { gridState.layoutInfo.visibleItemsInfo.firstOrNull { it.key in shownIdSet(shownIds) }?.let { vm.library.prefs.savedTop = it.key as? String } }
+        val obs = androidx.lifecycle.LifecycleEventObserver { _, ev -> if (ev == androidx.lifecycle.Lifecycle.Event.ON_STOP) remember() }
+        lifecycleOwner.lifecycle.addObserver(obs)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(obs) }
+    }
     val m = gridMetrics(vm.wall)
     val navPad = LocalNavPad.current
     // Both bars slide away while you scroll down and come back when you scroll up.
@@ -306,14 +329,15 @@ fun LibraryScreen(vm: MainViewModel, snack: SnackbarHostState, onSignIn: () -> U
             // Moving previews: the first few eligible tiles on screen, once scrolling stops.
             val streamOk = vm.previewUnsaved && !vm.offline
             val shownById = remember(shown) { shown.associateBy { it.id } }
-            val moving = rememberActivePreviews(gridState, vm.previewsActive, vm.previewCount, changeKey = s.saved.size) { id ->
+            val moving = rememberActivePreviews(gridState, vm.previewsActive, vm.previewLimit, changeKey = s.saved.size,
+                cost = { id -> previewCost(shownById[id], s.qualities[id], vm.previewCopies && id in s.localPreviews) }) { id ->
                 id in s.saved || (streamOk && shownById[id]?.let { it.sd != null || it.hd != null } == true)
             }
             // Rows above the tiles keep a margin even when the tiles themselves run edge to edge.
             val head = Modifier.padding(horizontal = m.head)
             LazyVerticalStaggeredGrid(
                 state = gridState,
-                columns = StaggeredGridCells.Fixed(vm.columns),
+                columns = StaggeredGridCells.Fixed(gridColumns(vm.columns)),
                 contentPadding = PaddingValues(start = m.side, end = m.side, top = 2.dp, bottom = navPad + 12.dp),
                 horizontalArrangement = Arrangement.spacedBy(m.gap),
                 verticalItemSpacing = m.gap,
@@ -339,7 +363,7 @@ fun LibraryScreen(vm: MainViewModel, snack: SnackbarHostState, onSignIn: () -> U
                     }
                 }
                 if (dlRunning || dlHasMessage) {
-                    item(span = StaggeredGridItemSpan.FullLine) { Box(head) { DownloadCard(dlState.value, s.failures.size, vm) } }
+                    item(span = StaggeredGridItemSpan.FullLine) { Box(head) { DownloadCard(dlState.value, s.failed.size, vm) } }
                 }
                 if (s.clips.isNotEmpty()) {
                     item(span = StaggeredGridItemSpan.FullLine) {
@@ -401,10 +425,15 @@ fun LibraryScreen(vm: MainViewModel, snack: SnackbarHostState, onSignIn: () -> U
                                 if (s.unseen.isNotEmpty()) FilterChip(vm.filter == Filter.Unseen,
                                     { vm.filter = if (vm.filter == Filter.Unseen) Filter.Saved else Filter.Unseen },
                                     { Text("New · %,d".format(s.unseen.size)) })
-                                if (s.failures.isNotEmpty()) FilterChip(vm.filter == Filter.Failed,
+                                if (s.failed.isNotEmpty()) FilterChip(vm.filter == Filter.Failed,
                                     { vm.filter = if (vm.filter == Filter.Failed) Filter.Saved else Filter.Failed },
-                                    { Text("Failed · %,d".format(s.failures.size)) },
+                                    { Text("Failed · %,d".format(s.failed.size)) },
                                     leadingIcon = { Icon(Icons.Default.ErrorOutline, null, Modifier.size(16.dp), tint = RgAmber) })
+                                // Clips the site has deleted: kept in the list, never downloaded again.
+                                if (s.dead.isNotEmpty()) FilterChip(vm.filter == Filter.Dead,
+                                    { vm.filter = if (vm.filter == Filter.Dead) Filter.Saved else Filter.Dead },
+                                    { Text("Removed · %,d".format(s.dead.size)) },
+                                    leadingIcon = { Icon(Icons.Default.LinkOff, null, Modifier.size(16.dp)) })
                             }
                         }
                     }
@@ -418,9 +447,18 @@ fun LibraryScreen(vm: MainViewModel, snack: SnackbarHostState, onSignIn: () -> U
                         }
                     }
                 }
-                if (vm.filter == Filter.Failed && s.failures.isNotEmpty()) {
+                if (vm.filter == Filter.Dead && s.dead.isNotEmpty()) {
                     item(span = StaggeredGridItemSpan.FullLine) {
-                        val gaveUp = s.failures.values.count { it.gaveUp }
+                        Row(verticalAlignment = Alignment.CenterVertically, modifier = head.fillMaxWidth().padding(vertical = 2.dp)) {
+                            Text("Deleted on the site, or set aside by you. Not downloaded again.", Modifier.weight(1f),
+                                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            TextButton(onClick = { vm.retryFailed(s.dead) }) { Text("Check again") }
+                        }
+                    }
+                }
+                if (vm.filter == Filter.Failed && s.failed.isNotEmpty()) {
+                    item(span = StaggeredGridItemSpan.FullLine) {
+                        val gaveUp = s.failures.values.count { it.gaveUp && !it.dead }
                         Row(verticalAlignment = Alignment.CenterVertically, modifier = head.fillMaxWidth().padding(vertical = 2.dp)) {
                             Text("Open a clip to see why it failed." + if (gaveUp > 0) " $gaveUp stopped retrying automatically (after ${app.redgrab.Failure.MAX_ATTEMPTS} runs or 7 days)." else " They're retried automatically on the next save.",
                                 Modifier.weight(1f), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -435,13 +473,15 @@ fun LibraryScreen(vm: MainViewModel, snack: SnackbarHostState, onSignIn: () -> U
                         thumb = thumbModel(s, vm.library, clip),
                         wall = vm.wall,
                         corner = m.corner,
-                        compact = vm.columns >= 5,
-                        preview = if (clip.id in moving) ({ VideoPreview(vm, clip, streamOk, Modifier.fillMaxSize()) }) else null,
+                        compact = gridColumns(vm.columns) >= 5,
+                        preview = if (isPreviewing(moving, clip.id)) ({ VideoPreview(vm, clip, streamOk, Modifier.fillMaxSize()) }) else null,
                         saved = clip.id in s.saved,
                         qualities = s.qualities[clip.id] ?: emptySet(),
                         partial = clip.id in s.partial,
                         sfw = vm.sfw,
                         failed = clip.id in s.failed,
+                        dead = clip.id in s.dead,
+                        spot = clip.id == spot,
                         downloading = dlRunning && dlCurrent == clip.id,
                         selected = clip.id in vm.selection,
                         selecting = selecting,
@@ -470,16 +510,75 @@ fun LibraryScreen(vm: MainViewModel, snack: SnackbarHostState, onSignIn: () -> U
                     }
                 }
             }
+            // Where you are in the list, and the way back up. The Saved grid has no pages of its
+            // own, so a page is every 50 clips of what is listed now.
+            val shownIndex = remember(shown) { HashMap<String, Int>(shown.size * 2).apply { shown.forEachIndexed { i, c -> put(c.id, i) } } }
+            val page by remember(shown) {
+                derivedStateOf { pageOf(gridState.layoutInfo.visibleItemsInfo.firstNotNullOfOrNull { (it.key as? String)?.let(shownIndex::get) } ?: 0) }
+            }
+            val atTop by remember { derivedStateOf { gridState.firstVisibleItemIndex == 0 && gridState.firstVisibleItemScrollOffset == 0 } }
+            val pages = pageCount(shown.size)
+            if (pages > 1 && !selecting) {
+                val jumps = rememberCoroutineScope()
+                PositionPill(page, pages, more = false, reach = pages, atTop = atTop,
+                    modifier = Modifier.align(Alignment.BottomEnd).padding(end = 8.dp, bottom = navPad + 8.dp),
+                    offset = vm.pillOffset, onMoved = vm::changePillOffset,
+                    onTop = { jumps.launch { gridState.scrollToItem(0) } },
+                    onJump = { n ->
+                        jumps.launch {
+                            // The rows above the clips (search, filters, banners) come first in the grid.
+                            val head = (gridState.layoutInfo.totalItemsCount - shown.size).coerceAtLeast(0)
+                            gridState.scrollToItem(if (n <= 1) 0 else head + (n - 1) * LIBRARY_PAGE)
+                        }
+                    })
+            }
         }
     }
 
     if (confirmSaveAll) {
+        // The queue: everything waiting to be saved. Save it all, clear it all, or take single clips out.
+        val pending = s.pending
+        if (pending.isEmpty()) confirmSaveAll = false
         AlertDialog(
             onDismissRequest = { confirmSaveAll = false },
-            title = { Text("Save %,d clips?".format(s.newCount)) },
-            text = { Text("Everything that isn't on this phone yet is downloaded in the background. You can pause it at any time.") },
+            title = { Text("%,d to save".format(pending.size)) },
+            text = {
+                Column {
+                    androidx.compose.foundation.lazy.LazyColumn(Modifier.fillMaxWidth().heightIn(max = 300.dp)) {
+                        items(pending.size, key = { pending[it].id }) { i ->
+                            val c = pending[i]
+                            Row(Modifier.fillMaxWidth().padding(vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+                                AsyncImage(c.thumb, null, contentScale = ContentScale.Crop,
+                                    modifier = Modifier.size(40.dp).clip(RoundedCornerShape(6.dp)).background(MaterialTheme.colorScheme.surfaceVariant)
+                                        .then(if (vm.sfw) Modifier.blur(12.dp) else Modifier))
+                                Spacer(Modifier.width(10.dp))
+                                Column(Modifier.weight(1f)) {
+                                    Text(c.user.ifBlank { c.id }, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodyMedium)
+                                    Text(s.failures[c.id]?.reason ?: c.sources.joinToString(), maxLines = 1, overflow = TextOverflow.Ellipsis,
+                                        style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                                IconButton(onClick = { vm.skip(listOf(c.id)) }) { Icon(Icons.Default.Close, "Don't save this one") }
+                            }
+                        }
+                    }
+                    // The same setting as in Settings → Downloads.
+                    Row(Modifier.fillMaxWidth().padding(top = 8.dp).clickable { vm.changeMobileData(!vm.mobileData) }, verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text("Use mobile data")
+                            Text(if (vm.mobileData) "Can use a lot of data." else "Off: waits for Wi-Fi.", style = MaterialTheme.typography.bodySmall,
+                                color = if (vm.mobileData) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        androidx.compose.material3.Switch(vm.mobileData, vm::changeMobileData)
+                    }
+                }
+            },
             confirmButton = { TextButton(onClick = { confirmSaveAll = false; vm.downloadAllNew() }) { Text("Save all") } },
-            dismissButton = { TextButton(onClick = { confirmSaveAll = false }) { Text("Cancel") } },
+            dismissButton = {
+                Row {
+                    TextButton(onClick = { confirmSaveAll = false; vm.skipPending() }) { Text("Clear all") }
+                    TextButton(onClick = { confirmSaveAll = false }) { Text("Close") }
+                }
+            },
         )
     }
     SfwAndFilterDialogs(vm, s, showFilters, { showFilters = false }, confirmSfwOff, { confirmSfwOff = false })
@@ -548,7 +647,7 @@ private fun DownloadCard(p: DownloadProgress, failedCount: Int, vm: MainViewMode
                     Spacer(Modifier.width(12.dp))
                     Text(p.message, Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
                     TextButton(onClick = vm::resumeDownload) { Text("Resume") }
-                    IconButton(onClick = vm::clearDownloadQueue) { Icon(Icons.Default.Close, "Forget these") }
+                    TextButton(onClick = vm::clearDownloadQueue) { Text("Clear queue") }
                 }
                 else -> Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(if (p.failed > 0) Icons.Default.ErrorOutline else Icons.Default.CheckCircle, null,
@@ -566,7 +665,7 @@ private fun DownloadCard(p: DownloadProgress, failedCount: Int, vm: MainViewMode
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun ClipTile(
-    clip: Clip, unseen: Boolean, thumb: Any?, wall: Boolean, corner: Dp, compact: Boolean, preview: (@Composable () -> Unit)?, saved: Boolean, qualities: Set<Quality>, partial: Boolean, sfw: Boolean, failed: Boolean, downloading: Boolean,
+    clip: Clip, unseen: Boolean, thumb: Any?, wall: Boolean, corner: Dp, compact: Boolean, preview: (@Composable () -> Unit)?, saved: Boolean, qualities: Set<Quality>, partial: Boolean, sfw: Boolean, failed: Boolean, dead: Boolean = false, spot: Boolean = false, downloading: Boolean,
     selected: Boolean, selecting: Boolean, onClick: () -> Unit, onLongClick: () -> Unit,
 ) {
     val haptic = LocalHapticFeedback.current
@@ -579,6 +678,8 @@ private fun ClipTile(
             .clip(shape)
             .background(MaterialTheme.colorScheme.surfaceContainerHigh)
             .then(if (selected) Modifier.border(3.dp, MaterialTheme.colorScheme.primary, shape) else Modifier)
+            // The clip that is open (or was a moment ago) in the clip view.
+            .spotlit(spot && !selected, shape, Color.White)
             .combinedClickable(
                 onClick = onClick,
                 onLongClick = { haptic.performHapticFeedback(HapticFeedbackType.LongPress); onLongClick() },
@@ -600,7 +701,7 @@ private fun ClipTile(
                     .background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.7f))))
             )
             Row(Modifier.align(Alignment.BottomStart).padding(5.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text(if (clip.isImage) clip.copyFile!!.substringAfterLast('.').uppercase() else Format.duration(clip.duration),
+                Text(if (clip.isImage) clip.fileExt.uppercase() else Format.duration(clip.duration),
                     color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Medium)
                 if (!clip.hasAudio && !clip.isImage) {
                     Spacer(Modifier.width(4.dp))
@@ -622,6 +723,7 @@ private fun ClipTile(
                 clip.isCopy -> TileLabel(if (compact) "E" else "EDIT", RgPurple)
                 partial && !saved -> Icon(Icons.Default.Downloading, "Partly downloaded; resumes next time", tint = RgAmber,
                     modifier = Modifier.size(20.dp))
+                dead && !saved -> Icon(Icons.Default.LinkOff, "Removed from the site", tint = Color.White.copy(alpha = 0.8f), modifier = Modifier.size(20.dp))
                 failed && !saved -> Icon(Icons.Default.ErrorOutline, "Failed", tint = RgAmber, modifier = Modifier.size(20.dp))
                 else -> Row(verticalAlignment = Alignment.CenterVertically) {
                     // Saved quality as plain icons (hidden when previews are very small).
@@ -630,7 +732,7 @@ private fun ClipTile(
                         if (Quality.SD in qualities) Icon(Icons.Outlined.Sd, "Saved in SD", tint = Color.White, modifier = Modifier.size(18.dp))
                     }
                     // One icon for source + saved state: heart/bookmark/globe, outline = not saved, green = saved.
-                    SourceIcon(liked = clip.liked, inCollection = clip.colIds.isNotEmpty(), saved = saved, size = if (compact) 14.dp else 18.dp, imported = clip.imported)
+                    SourceIcon(liked = clip.liked, inCollection = clip.colIds.isNotEmpty(), saved = saved, size = if (compact) 14.dp else 18.dp, imported = "Imported" in clip.sources)
                 }
             }
         }
@@ -688,3 +790,6 @@ private fun EmptyHint(neverSynced: Boolean) {
             textAlign = TextAlign.Center, modifier = Modifier.padding(horizontal = 40.dp, vertical = 4.dp))
     }
 }
+
+/** The IDs as a set, for telling a clip's tile from the grid's header items. */
+private fun shownIdSet(ids: List<String>): Set<String> = ids.toHashSet()

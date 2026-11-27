@@ -13,6 +13,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -22,6 +23,18 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
+import androidx.compose.material.icons.filled.FitScreen
+import androidx.compose.material.icons.filled.ZoomOutMap
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.boundsInParent
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -71,6 +84,7 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -78,6 +92,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
@@ -106,6 +121,7 @@ import app.redgrab.Clip
 import app.redgrab.Facet
 import app.redgrab.Format
 import app.redgrab.MainViewModel
+import app.redgrab.OnlineSource
 import app.redgrab.PlayerSession
 import app.redgrab.Quality
 import app.redgrab.RedGifsApi
@@ -117,7 +133,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-/** Where a clip is played from. Saved files play offline; others stream from RedGifs. */
+/** Where a clip is played from. Saved files play offline; others stream from their site. */
 private enum class Source { Saved, Stream }
 
 @OptIn(UnstableApi::class)
@@ -135,6 +151,12 @@ fun PlayerScreen(vm: MainViewModel, session: PlayerSession) {
     /** A clip from online browsing that isn't in the library (yet). */
     val online = clipId !in byId
     val currentClip by rememberUpdatedState(clip)
+    // Save button: a ring while the clip is being saved, then the "saved" mark for a moment.
+    val saveProgress = vm.saveProgress(clip.id, dl, s)
+    var wasSaving by remember(clip.id) { mutableStateOf(false) }
+    var justSaved by remember(clip.id) { mutableStateOf(false) }
+    LaunchedEffect(clip.id, saveProgress != null) { if (saveProgress != null) wasSaving = true }
+    LaunchedEffect(clip.id, saved) { if (saved && wasSaving) { justSaved = true; delay(1_800); justSaved = false } }
 
     var fullscreen by remember { mutableStateOf(false) }
     var playing by remember { mutableStateOf(true) }
@@ -149,6 +171,15 @@ fun PlayerScreen(vm: MainViewModel, session: PlayerSession) {
     var currentSource by remember { mutableStateOf(Source.Stream) }
     var retried by remember { mutableStateOf(false) }
     var confirmDelete by remember { mutableStateOf(false) }
+    /** Width and height of what's showing (from the site, else from the video or picture itself); 0 = not known yet. */
+    var mediaSize by remember { mutableStateOf(0 to 0) }
+    var boxSize by remember { mutableStateOf(IntSize.Zero) }
+    /** Where on the screen the clip may be drawn (the screen less a margin, unless it fills the screen). */
+    var frame by remember { mutableStateOf(androidx.compose.ui.geometry.Rect.Zero) }
+    /** Heights of the bar above and the panel below, so the clip sits between them and leaves background to tap. */
+    var topBar by remember { mutableStateOf(0) }
+    var bottomPanel by remember { mutableStateOf(0) }
+    var panelRoom by remember { mutableStateOf(0) }
 
     val ua = remember { vm.library.prefs.userAgent ?: runCatching { WebSettings.getDefaultUserAgent(ctx) }.getOrDefault("Mozilla/5.0") }
     // Saved files: read straight from the phone. Unsaved clips: stream through a local cache.
@@ -182,24 +213,39 @@ fun PlayerScreen(vm: MainViewModel, session: PlayerSession) {
     }
 
     // Saved file first (HD, then SD); stream only clips that aren't on the phone.
-    LaunchedEffect(clip.id, s.qualities[clip.id]) {
+    LaunchedEffect(clip.id, s.qualities[clip.id], clip.copyFile) {
         retried = false
         position = 0; duration = 0
+        mediaSize = if (clip.width > 0 && clip.height > 0) clip.width to clip.height else 0 to 0
         val local = withContext(Dispatchers.IO) { vm.library.markSeen(listOf(clip.id)); vm.library.localFile(clip) }
         playingQuality = local?.second
         imageUri = null
         if (clip.isImage) {
             exo.stop(); exo.clearMediaItems()
-            currentSource = Source.Saved
-            if (local != null) { error = null; imageUri = local.first } else error = "The file is missing from the save folder."
+            when {
+                local != null -> { currentSource = Source.Saved; error = null; imageUri = local.first }
+                // An online GIF that isn't saved yet: shown straight from its site.
+                clip.copyFile == null && clip.hd != null -> { currentSource = Source.Stream; error = null; imageUri = Uri.parse(clip.hd) }
+                else -> { currentSource = Source.Saved; error = "The file is missing from the save folder." }
+            }
             return@LaunchedEffect
         }
-        val stream = clip.url(vm.library.prefs.hd)?.let(Uri::parse)
+        var c = clip
+        if (local == null && c.hd == null && c.sd == null && !c.isCopy && !c.imported) {
+            // A RedGifs clip found on Reddit: only its ID is known until RedGifs is asked.
+            exo.stop(); exo.clearMediaItems()
+            firstFrame = false; error = null; currentSource = Source.Stream
+            c = vm.resolveOnline(c) ?: run {
+                error = if (vm.signedIn) "Couldn't get this clip from RedGifs." else "Sign in to RedGifs to play this clip."
+                return@LaunchedEffect
+            }
+        }
+        val stream = c.url(vm.library.prefs.hd)?.let(Uri::parse)
         when {
-            local != null -> load(clip, Source.Saved, local.first)
-            clip.isCopy -> error = "The edited file is missing from the save folder."
-            clip.imported -> error = "The file is missing from the save folder."
-            stream != null -> load(clip, Source.Stream, stream)
+            local != null -> load(c, Source.Saved, local.first)
+            c.isCopy -> error = "The edited file is missing from the save folder."
+            c.imported -> error = "The file is missing from the save folder."
+            stream != null -> load(c, Source.Stream, stream)
             else -> error = "No video available for this clip."
         }
     }
@@ -210,19 +256,17 @@ fun PlayerScreen(vm: MainViewModel, session: PlayerSession) {
             override fun onIsPlayingChanged(isPlaying: Boolean) { playing = exo.playWhenReady }
             override fun onPlaybackStateChanged(state: Int) { buffering = state == Player.STATE_BUFFERING }
             override fun onRenderedFirstFrame() { firstFrame = true }
+            override fun onVideoSizeChanged(v: androidx.media3.common.VideoSize) {
+                if (v.width > 0 && v.height > 0) mediaSize = (v.width * v.pixelWidthHeightRatio).toInt() to v.height
+            }
             override fun onPlayerError(e: PlaybackException) {
                 val clip = currentClip
                 AppLog.w("Playback error for ${clip.id} (${currentSource}): ${e.errorCodeName}")
                 if (retried || clip.imported) { error = "Can't play this clip (${e.errorCodeName}). See Log."; return }
                 retried = true
                 scope.launch {
-                    // Saved file unreadable → stream instead. Stream URL expired → fetch a fresh one.
-                    val fresh = withContext(Dispatchers.IO) {
-                        runCatching {
-                            val p = vm.library.prefs
-                            RedGifsApi(p.token!!, p.userAgent!!).clip(clip.id)?.also { vm.library.replaceClip(it) }
-                        }.getOrNull()
-                    }
+                    // Saved file unreadable → stream instead. Stream URL expired → fetch a fresh one from the clip's site.
+                    val fresh = vm.refreshClip(clip)
                     if (currentClip.id != clip.id) return@launch // you've moved on to another clip
                     val url = if (clip.isCopy) null else (fresh ?: clip).url(vm.library.prefs.hd)
                     if (url != null) load(clip, Source.Stream, Uri.parse(url))
@@ -278,7 +322,7 @@ fun PlayerScreen(vm: MainViewModel, session: PlayerSession) {
         onDispose { lifecycle.removeObserver(obs); exo.release() }
     }
 
-    // Immersive fullscreen: hide status and navigation bars.
+    // Immersive fullscreen (the button that hides the controls): hide status and navigation bars too.
     DisposableEffect(fullscreen) {
         val window = (view.context as? Activity)?.window
         if (window != null) {
@@ -290,6 +334,18 @@ fun PlayerScreen(vm: MainViewModel, session: PlayerSession) {
         }
         onDispose { if (window != null) WindowCompat.getInsetsController(window, view).show(WindowInsetsCompat.Type.systemBars()) }
     }
+
+    // How the clip sits on the screen. Normally it is a larger view laid over the grid: shown
+    // whole, with a margin, and the grid you came from stays visible (dimmed) around it; a tap
+    // beside the clip takes you back to exactly where you were. With "Fill the screen" on, a clip
+    // that is the same way up as the screen covers all of it instead (edges cropped).
+    val aspect = if (mediaSize.second > 0) mediaSize.first.toFloat() / mediaSize.second else 0f
+    val screenAspect = if (boxSize.height > 0) boxSize.width.toFloat() / boxSize.height else 0f
+    val cover = vm.playerFill && (aspect == 0f || screenAspect == 0f || (aspect < 1f) == (screenAspect < 1f))
+    val coverNow by rememberUpdatedState(cover)
+    val aspectNow by rememberUpdatedState(aspect)
+    val frameNow by rememberUpdatedState(frame)
+    val scale = if (cover) ContentScale.Crop else ContentScale.Fit
 
     BackHandler { if (fullscreen) fullscreen = false else vm.closePlayer() }
 
@@ -303,33 +359,78 @@ fun PlayerScreen(vm: MainViewModel, session: PlayerSession) {
         else { exo.play(); playing = true; show(Icons.Default.PlayArrow) }
     }
 
-    Box(Modifier.fillMaxSize().background(Color.Black)) {
+    Box(Modifier.fillMaxSize().onSizeChanged { boxSize = it }.background(Color.Black.copy(alpha = if (cover) 1f else 0.6f))) {
+      // The clip's frame: the whole screen when it fills it, otherwise inset so the grid shows around it.
+      Box(
+        (if (cover) Modifier.fillMaxSize()
+        else {
+            // Between the bar above and the panel below (neither passes taps on), and clear of both sides,
+            // so there is always background left to tap: at least a tenth of the width on each side.
+            val d = LocalDensity.current
+            val side = with(d) { maxOf(40.dp, (boxSize.width * (if (boxSize.width > boxSize.height) 0.14f else 0.10f)).toDp()) }
+            val gap = 16.dp
+            val room = with(d) { (boxSize.height * 0.42f).toDp() } // the panel never takes more than this from the clip
+            // Sideways there isn't the height to stack bar, clip and panel: the clip takes the height and the
+            // panel lies over its lower part, as a see-through band. The sides stay free to tap.
+            val sideways = boxSize.width > boxSize.height
+            val top = if (sideways) 8.dp else if (fullscreen || topBar == 0) 56.dp else with(d) { topBar.toDp() } + gap
+            // The panel's height differs a little from clip to clip (tags, notes); the card keeps the room for the
+            // tallest one seen, so it stays the same size as you go through clips.
+            if (bottomPanel > panelRoom) panelRoom = bottomPanel
+            val bottom = if (sideways) 8.dp else if (fullscreen || panelRoom == 0) 56.dp else minOf(with(d) { panelRoom.toDp() }, room) + gap
+            (if (fullscreen || sideways) Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing) else Modifier.fillMaxSize())
+                .padding(start = side, end = side, top = top, bottom = bottom)
+        })
+            .onGloballyPositioned { frame = it.boundsInParent() }
+            // The same card for every clip, whatever its shape: the clip is fitted into it and the rest of the
+            // card is filled with a dimmed, blurred copy of its picture. So the place to tap never moves.
+            .then(if (cover) Modifier else Modifier.clip(RoundedCornerShape(14.dp)).background(Color(0xFF0B0B0E)))
+      ) {
+        if (!cover) {
+            AsyncImage(thumbModel(s, vm.library, clip), null, contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize().blur(24.dp), alpha = 0.35f)
+        }
         AndroidView(
             modifier = Modifier.fillMaxSize(),
             factory = { c ->
                 PlayerView(c).apply {
                     useController = false
-                    resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
                     setShutterBackgroundColor(android.graphics.Color.TRANSPARENT)
                     player = exo
                 }
             },
+            update = {
+                it.resizeMode = if (cover) AspectRatioFrameLayout.RESIZE_MODE_ZOOM else AspectRatioFrameLayout.RESIZE_MODE_FIT
+                // A picture needs no video surface; left in place it would paint the whole screen black behind the picture.
+                it.visibility = if (imageUri != null) android.view.View.GONE else android.view.View.VISIBLE
+            },
         )
 
-        imageUri?.let { AsyncImage(it, null, contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize().background(Color.Black)) }
-
-        // Thumbnail over the (still black) video surface until the first frame arrives.
-        if (!firstFrame && imageUri == null) {
-            AsyncImage(thumbModel(s, vm.library, clip), null, contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize().background(Color.Black))
+        imageUri?.let {
+            AsyncImage(it, null, contentScale = scale, modifier = Modifier.fillMaxSize(),
+                onSuccess = { ok -> if (ok.result.image.width > 0 && ok.result.image.height > 0) mediaSize = ok.result.image.width to ok.result.image.height })
         }
 
-        // Gesture layer: left quarter = previous, right quarter = next, middle = play/pause; swipe to navigate.
+        // Thumbnail over the (still empty) video surface until the first frame arrives.
+        if (!firstFrame && imageUri == null) {
+            AsyncImage(thumbModel(s, vm.library, clip), null, contentScale = scale, modifier = Modifier.fillMaxSize())
+        }
+      }
+
+        // Gesture layer. On the clip: left quarter = previous, right quarter = next, middle = play/pause.
+        // Beside the clip (when it doesn't cover the screen): close. Swipe sideways to navigate, down to close.
         Box(
             Modifier.fillMaxSize()
                 .pointerInput(session.index, session.ids.size) {
                     detectTapGestures { o ->
-                        val w = size.width
+                        val w = size.width.toFloat()
+                        val a = aspectNow
+                        val f = frameNow
+                        // The card is the clip's place whatever the clip's own shape: a tap on it is for the clip,
+                        // a tap beside it closes.
+                        val onClip = coverNow || f.isEmpty || f.contains(o)
                         when {
+                            !onClip -> vm.closePlayer()
                             o.x < w * 0.25f -> prev()
                             o.x > w * 0.75f -> next()
                             else -> togglePlay()
@@ -342,6 +443,13 @@ fun PlayerScreen(vm: MainViewModel, session: PlayerSession) {
                         onDragStart = { dx = 0f },
                         onDragEnd = { if (dx > 120) prev() else if (dx < -120) next() },
                     ) { _, d -> dx += d }
+                }
+                .pointerInput(Unit) {
+                    var dy = 0f
+                    detectVerticalDragGestures(
+                        onDragStart = { dy = 0f },
+                        onDragEnd = { if (dy > size.height * 0.12f) vm.closePlayer() },
+                    ) { _, d -> dy += d }
                 },
         )
 
@@ -373,14 +481,18 @@ fun PlayerScreen(vm: MainViewModel, session: PlayerSession) {
         if (fullscreen) {
             // Only a subtle corner control in fullscreen.
             IconButton(onClick = { fullscreen = false }, modifier = Modifier.align(Alignment.TopEnd).padding(8.dp)) {
-                Icon(Icons.Default.FullscreenExit, "Exit fullscreen", tint = Color.White.copy(alpha = 0.6f))
+                Icon(Icons.Default.FullscreenExit, "Show controls", tint = Color.White.copy(alpha = 0.6f))
             }
         } else {
             // Top bar.
             Row(
                 Modifier.align(Alignment.TopCenter).fillMaxWidth()
                     .background(Brush.verticalGradient(listOf(Color.Black.copy(alpha = 0.7f), Color.Transparent)))
-                    .statusBarsPadding().padding(horizontal = 4.dp, vertical = 4.dp),
+                    // Clear of the camera cut-out now that the status bar is hidden. Taps on the bar itself do nothing.
+                    .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal))
+                    .onSizeChanged { topBar = it.height }
+                    .pointerInput(Unit) { detectTapGestures { } }
+                    .padding(horizontal = 4.dp, vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 IconButton(onClick = vm::closePlayer) { Icon(Icons.Default.Close, "Close", tint = Color.White) }
@@ -391,21 +503,28 @@ fun PlayerScreen(vm: MainViewModel, session: PlayerSession) {
                     Icon(if (vm.playMuted) Icons.AutoMirrored.Filled.VolumeOff else Icons.AutoMirrored.Filled.VolumeUp,
                         if (vm.playMuted) "Unmute" else "Mute", tint = Color.White)
                 }
-                IconButton(onClick = { fullscreen = true }) { Icon(Icons.Default.Fullscreen, "Fullscreen", tint = Color.White) }
+                IconButton(onClick = { vm.changePlayerFill(!vm.playerFill) }) {
+                    Icon(if (vm.playerFill) Icons.Default.FitScreen else Icons.Default.ZoomOutMap,
+                        if (vm.playerFill) "Show the whole clip" else "Fill the screen", tint = Color.White)
+                }
+                IconButton(onClick = { fullscreen = true }) { Icon(Icons.Default.Fullscreen, "Hide controls", tint = Color.White) }
             }
 
             // Bottom panel: info, tags, progress, actions.
             Column(
                 Modifier.align(Alignment.BottomCenter).fillMaxWidth()
                     .background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.85f))))
-                    .navigationBarsPadding().padding(horizontal = 16.dp, vertical = 8.dp),
+                    .onSizeChanged { bottomPanel = it.height }
+                    // Clear of the camera cut-out when the phone is held sideways.
+                    .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal))
+                    .navigationBarsPadding().pointerInput(Unit) { detectTapGestures { } }.padding(horizontal = 16.dp, vertical = 8.dp),
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
                         if (clip.user.isNotEmpty()) {
                             Row(verticalAlignment = Alignment.CenterVertically,
                                 modifier = Modifier.clickable {
-                                    if (online) vm.openPerformerOnline(clip.user) else vm.browse(Facet(Facet.Kind.Performer, clip.user))
+                                    if (online) vm.openPerformerOnline(clip.user, OnlineSource.of(clip.id)) else vm.browse(Facet(Facet.Kind.Performer, clip.user))
                                 }) {
                                 Text(clip.user, color = Color.White, fontWeight = FontWeight.SemiBold)
                             }
@@ -416,16 +535,19 @@ fun PlayerScreen(vm: MainViewModel, session: PlayerSession) {
                         }
                         Text(
                             buildString {
-                                append(if (clip.isImage) clip.copyFile!!.substringAfterLast('.').uppercase() else Format.duration(clip.duration))
-                                if (clip.width > 0) append(if (clip.isImage) " · ${clip.width}×${clip.height}" else " · ${clip.height}p")
-                                if (!clip.hasAudio && !clip.isImage) append(" · no sound")
-                                if (clip.views > 0) append(" · %,d views".format(clip.views))
+                                // Some sites don't say how long a clip is; the length is left out then.
+                                listOfNotNull(
+                                    if (clip.isImage) clip.fileExt.uppercase() else if (clip.duration > 0 || !online) Format.duration(clip.duration) else null,
+                                    if (clip.width <= 0) null else if (clip.isImage) "${clip.width}×${clip.height}" else "${clip.height}p",
+                                    "no sound".takeIf { !clip.hasAudio && !clip.isImage },
+                                    "%,d views".format(clip.views).takeIf { clip.views > 0 },
+                                ).joinTo(this, " · ")
                             },
                             color = Color.White.copy(alpha = 0.7f), fontSize = 12.sp,
                         )
                     }
                     // Same status icon as the grids: heart / bookmark / globe, green and filled once saved.
-                    if (!clip.isCopy) SourceIcon(liked = clip.liked, inCollection = clip.colIds.isNotEmpty(), saved = saved, size = 24.dp, imported = clip.imported)
+                    if (!clip.isCopy) SourceIcon(liked = clip.liked, inCollection = clip.colIds.isNotEmpty(), saved = saved, size = 24.dp, imported = "Imported" in clip.sources)
                 }
                 if (clip.tags.isNotEmpty() || clip.niches.isNotEmpty() || clip.category.isNotBlank()) {
                     Row(Modifier.padding(top = 8.dp).horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -444,7 +566,7 @@ fun PlayerScreen(vm: MainViewModel, session: PlayerSession) {
                         clip.tags.forEach { t ->
                             Text(t, color = Color.White, fontSize = 12.sp,
                                 modifier = Modifier.clip(RoundedCornerShape(50)).background(Color.White.copy(alpha = 0.15f))
-                                    .clickable { if (online) vm.searchOnline(t) else vm.browse(Facet(Facet.Kind.Tag, t)) }
+                                    .clickable { if (online) vm.searchOnline(t, OnlineSource.of(clip.id)) else vm.browse(Facet(Facet.Kind.Tag, t)) }
                                     .padding(horizontal = 10.dp, vertical = 4.dp))
                         }
                     }
@@ -460,12 +582,13 @@ fun PlayerScreen(vm: MainViewModel, session: PlayerSession) {
                 s.failures[clip.id]?.let { f ->
                     Row(Modifier.padding(bottom = 6.dp).clip(RoundedCornerShape(10.dp)).background(Color.Black.copy(alpha = 0.5f)).padding(start = 10.dp),
                         verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.ErrorOutline, null, tint = RgAmber, modifier = Modifier.size(18.dp))
+                        Icon(Icons.Default.ErrorOutline, null, tint = if (f.dead) Color.White.copy(alpha = 0.7f) else RgAmber, modifier = Modifier.size(18.dp))
                         Spacer(Modifier.width(8.dp))
-                        Text("Download failed: ${f.reason}" + (if (f.attempts > 1) " (${f.attempts} tries)" else "") +
-                            (if (f.gaveUp) ". No more automatic retries." else ""),
+                        Text(if (f.dead) "${f.reason}. Not downloaded again."
+                            else "Download failed: ${f.reason}" + (if (f.attempts > 1) " (${f.attempts} tries)" else "") +
+                                (if (f.gaveUp) ". No more automatic retries." else ""),
                             color = Color.White, fontSize = 12.sp, modifier = Modifier.weight(1f))
-                        androidx.compose.material3.TextButton(onClick = { vm.retryFailed(listOf(clip.id)) }) { Text("Retry") }
+                        androidx.compose.material3.TextButton(onClick = { vm.retryFailed(listOf(clip.id)) }) { Text(if (f.dead) "Check again" else "Retry") }
                     }
                 }
                 // Where it's playing from and which qualities are saved (tap a missing one to save it).
@@ -474,8 +597,10 @@ fun PlayerScreen(vm: MainViewModel, session: PlayerSession) {
                     if (clip.isCopy) {
                         Text("Edited copy · ${clip.copyNote}", color = RgPurple.copy(alpha = 0.95f), fontSize = 12.sp,
                             maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-                    } else if (clip.imported) {
-                        Text("Imported · ${clip.copyFile!!.substringAfterLast('/')}", color = Color.White.copy(alpha = 0.7f), fontSize = 12.sp,
+                    } else if (clip.imported || OnlineSource.keepsOwnFile(clip)) {
+                        // Where it's from ("Imported", or the site a picture was saved from), then the file once it's on the phone.
+                        Text(listOfNotNull(clip.sources.firstOrNull() ?: "Imported", clip.copyFile?.substringAfterLast('/')).joinToString(" · "),
+                            color = Color.White.copy(alpha = 0.7f), fontSize = 12.sp,
                             maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
                     } else {
                         for (q in listOf(Quality.HD, Quality.SD)) {
@@ -488,7 +613,7 @@ fun PlayerScreen(vm: MainViewModel, session: PlayerSession) {
                         Spacer(Modifier.weight(1f))
                         Text(
                             when {
-                                currentSource == Source.Stream -> "Streaming from RedGifs"
+                                currentSource == Source.Stream -> "Streaming from ${OnlineSource.of(clip.id).label}"
                                 playingQuality == Quality.LEGACY -> "Playing saved file"
                                 playingQuality != null -> "Playing saved ${playingQuality!!.label}"
                                 else -> ""
@@ -501,17 +626,17 @@ fun PlayerScreen(vm: MainViewModel, session: PlayerSession) {
                     PillButton(Icons.AutoMirrored.Filled.Send, if (vm.sharing) "Preparing…" else "WhatsApp", RgGreen.copy(alpha = 0.9f)) {
                         vm.shareToWhatsApp(clip)
                     }
-                    if (clip.isImage) Unit // pictures can't be trimmed
-                    else if (saved) PillButton(Icons.Default.ContentCut, "Edit", Color.White.copy(alpha = 0.15f)) { vm.openEditor(clip) }
-                    else PillButton(Icons.Default.Download, "Save", Color.White.copy(alpha = 0.15f)) {
-                        if (online) vm.saveOnline(clip) else vm.download(clip.id)
+                    // Save → ring with the progress → "Saved". A saved video then offers Edit; pictures can't be trimmed.
+                    if (saved && !justSaved && !clip.isImage) PillButton(Icons.Default.ContentCut, "Edit", Color.White.copy(alpha = 0.15f)) { vm.openEditor(clip) }
+                    else if (!saved || justSaved) SaveButton(saveProgress, saved) {
+                        if (online) vm.saveOnline(clip) else vm.downloadShown(clip.id)
                     }
                     Spacer(Modifier.weight(1f))
                     if (clip.isCopy) {
                         IconButton(onClick = { confirmDelete = true }) { Icon(Icons.Default.DeleteOutline, "Delete edited copy", tint = Color.White) }
                     } else {
                         // Related: RedGifs' own "more like this" list for the clip, shown in Discover.
-                        if (!clip.imported) IconButton(onClick = { vm.openRelated(clip) }, modifier = Modifier.size(42.dp)) {
+                        if (!clip.imported && !clip.isImage && OnlineSource.of(clip.id) == OnlineSource.RedGifs) IconButton(onClick = { vm.openRelated(clip) }, modifier = Modifier.size(42.dp)) {
                             Icon(Icons.Default.DynamicFeed, "Related clips", tint = Color.White)
                         }
                         if (!online) IconButton(onClick = { vm.editInfo(listOf(clip.id)) }, modifier = Modifier.size(42.dp)) {
@@ -526,6 +651,7 @@ fun PlayerScreen(vm: MainViewModel, session: PlayerSession) {
         }
     }
 
+    vm.saveRequest?.let { CategoryDialog(vm, it) }
     if (confirmDelete) {
         androidx.compose.material3.AlertDialog(
             onDismissRequest = { confirmDelete = false },
@@ -551,6 +677,87 @@ private fun QualityChip(q: Quality, saved: Boolean, available: Boolean, download
         if (!saved && available) Icon(Icons.Default.ArrowDownward, null, tint = Color.White,
             modifier = Modifier.size(11.dp).align(Alignment.BottomEnd))
     }
+}
+
+/**
+ * The Save button. [progress]: null = not saving, -1 = saving with no known size (a spinning
+ * ring), 0..1 = how far (the ring fills). [done] = the clip is on the phone.
+ */
+@Composable
+private fun SaveButton(progress: Float?, done: Boolean, onClick: () -> Unit) {
+    val busy = progress != null && !done
+    val shown by androidx.compose.animation.core.animateFloatAsState((progress ?: 0f).coerceIn(0f, 1f), label = "save")
+    Row(
+        Modifier.clip(RoundedCornerShape(50)).background(Color.White.copy(alpha = 0.15f))
+            .clickable(enabled = !busy && !done, onClick = onClick).padding(horizontal = 14.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        androidx.compose.animation.Crossfade(if (done) 2 else if (busy) 1 else 0, label = "save icon") { state ->
+            Box(Modifier.size(18.dp), contentAlignment = Alignment.Center) {
+                when (state) {
+                    2 -> Icon(Icons.Default.CheckCircle, null, tint = RgGreen, modifier = Modifier.size(18.dp))
+                    1 -> if (progress != null && progress >= 0f)
+                        CircularProgressIndicator(progress = { shown }, modifier = Modifier.size(18.dp), color = Color.White,
+                            strokeWidth = 2.dp, trackColor = Color.White.copy(alpha = 0.25f))
+                    else CircularProgressIndicator(Modifier.size(18.dp), color = Color.White, strokeWidth = 2.dp)
+                    else -> Icon(Icons.Default.Download, null, tint = Color.White, modifier = Modifier.size(18.dp))
+                }
+            }
+        }
+        Spacer(Modifier.width(6.dp))
+        Text(when { done -> "Saved"; busy && progress != null && progress >= 0f -> "%d%%".format((shown * 100).toInt()); busy -> "Saving"; else -> "Save" },
+            color = Color.White, fontWeight = FontWeight.Medium, maxLines = 1)
+    }
+}
+
+/**
+ * Asked when an online clip is saved: where it goes. A category is yours and lives on the phone.
+ * A RedGifs clip can also go into one of your RedGifs collections, which changes your account
+ * there just as the site's own "add to collection" does. One tap on a chip saves.
+ */
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+@Composable
+private fun CategoryDialog(vm: MainViewModel, request: MainViewModel.SaveRequest) {
+    val s by vm.state.collectAsStateWithLifecycle()
+    val categories = remember { vm.categories() }
+    val canCollect = vm.canCollect(request.clip)
+    var new by remember { mutableStateOf("") }
+    var alsoOnRedGifs by remember { mutableStateOf(canCollect) }
+    fun save(category: String, collection: app.redgrab.RgCollection? = null, newCollection: String? = null) =
+        vm.saveOnline(request.clip, request.quality, category, collection, newCollection)
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = vm::cancelSave,
+        title = { Text("Save to") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                Text("Category · on this phone", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
+                androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                    androidx.compose.material3.AssistChip(onClick = { save("") }, label = { Text("No category") })
+                    categories.take(24).forEach { c -> androidx.compose.material3.AssistChip(onClick = { save(c) }, label = { Text(c, maxLines = 1) }) }
+                }
+                if (canCollect && s.collections.isNotEmpty()) {
+                    Text("Collection · on RedGifs", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.padding(top = 10.dp))
+                    androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                        s.collections.take(40).forEach { c ->
+                            androidx.compose.material3.AssistChip(onClick = { save("", collection = c) }, label = { Text(c.name, maxLines = 1) })
+                        }
+                    }
+                }
+                androidx.compose.material3.OutlinedTextField(new, { new = it.take(40) }, singleLine = true, label = { Text("New") },
+                    modifier = Modifier.fillMaxWidth().padding(top = 10.dp))
+                if (canCollect) Row(Modifier.fillMaxWidth().clickable { alsoOnRedGifs = !alsoOnRedGifs }, verticalAlignment = Alignment.CenterVertically) {
+                    androidx.compose.material3.Checkbox(alsoOnRedGifs, { alsoOnRedGifs = it })
+                    Text("Also a collection on RedGifs", style = MaterialTheme.typography.bodySmall)
+                }
+            }
+        },
+        confirmButton = {
+            androidx.compose.material3.TextButton(enabled = new.isNotBlank(),
+                onClick = { save(new, newCollection = new.takeIf { canCollect && alsoOnRedGifs }) }) { Text("Save") }
+        },
+        dismissButton = { androidx.compose.material3.TextButton(onClick = vm::cancelSave) { Text("Cancel") } },
+    )
 }
 
 @Composable
