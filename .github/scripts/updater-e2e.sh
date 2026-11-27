@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+# Run on an emulator after a release is published: does the app update itself?
+#
+# Installs the release before the latest one, opens it, sends it to the background and lets its
+# periodic update check run. The app has to find the latest release on GitHub (without a token),
+# download it and install it by itself. Passes when the installed build number becomes the
+# latest release's.
+#
+# This is the app's own updater end to end, as an installed older version runs it. It needs two
+# published releases and a network path from the emulator to GitHub.
+set -uo pipefail
+PKG=app.redgrab
+
+tags=$(gh release list --limit 2 --json tagName --jq '.[].tagName')
+new=$(echo "$tags" | sed -n 1p)
+old=$(echo "$tags" | sed -n 2p)
+if [ -z "$old" ]; then echo "Fewer than two releases; nothing to update from."; exit 0; fi
+rm -rf e2e && mkdir -p e2e/old e2e/new
+gh release download "$old" --pattern '*.apk' --dir e2e/old
+# The build number is in the file name: RedGrab-<version>-<build>.apk
+want=$(gh release view "$new" --json assets --jq '.assets[].name' | sed -n 's/.*-\([0-9]*\)\.apk$/\1/p' | head -1)
+echo "Installing $old; it should update itself to $new (build $want)"
+
+build() { adb shell dumpsys package "$PKG" | sed -n 's/.*versionCode=\([0-9]*\).*/\1/p' | head -1; }
+jobs_of() { adb shell dumpsys jobscheduler | sed -n "s/^ *JOB #u[0-9a-z]*\/\([0-9]*\): .*$PKG\/.*/\1/p" | sort -u; }
+report() {
+  echo "--- the app's log"
+  adb logcat -d -s RedGrab:V | tail -60
+  echo "--- installer"
+  adb logcat -d | grep -iE "PackageInstaller|InstallPackageHelper|INSTALL_FAILED|PackageManager.*$PKG" | tail -30
+}
+
+adb uninstall "$PKG" > /dev/null 2>&1 || true
+adb install -g "$(ls e2e/old/*.apk | head -1)" > /dev/null
+echo "Installed build $(build); installer of record: $(adb shell pm list packages -i "$PKG" | tr -d '\r')"
+adb logcat -c
+adb shell am start -W -n "$PKG/.MainActivity" > /dev/null
+# On opening, the app looks for a release and downloads it; it installs only when it isn't in use.
+sleep 45
+adb shell input keyevent KEYCODE_HOME
+sleep 3
+
+for round in 1 2 3 4 5 6; do
+  ids=$(jobs_of)
+  echo "Round $round: running the app's background jobs ($(echo $ids | tr '\n' ' '))"
+  for id in $ids; do adb shell cmd jobscheduler run -f "$PKG" "$id" > /dev/null 2>&1 || true; done
+  for i in $(seq 1 12); do
+    sleep 5
+    if [ "$(build)" = "$want" ]; then
+      echo "ok: the app updated itself to build $want"
+      adb logcat -c
+      adb shell am start -W -S -n "$PKG/.MainActivity" > /dev/null
+      sleep 15
+      if adb logcat -d | grep -A3 "FATAL EXCEPTION" | grep -q "Process: $PKG" || ! adb shell pidof "$PKG" > /dev/null; then
+        report; echo "::error::The app updated itself but doesn't start afterwards"; exit 1
+      fi
+      echo "ok: it starts after updating itself"
+      exit 0
+    fi
+  done
+  # Android asks for a confirmation instead of installing silently: that is the app working, but not unattended.
+  if adb logcat -d -s RedGrab:V | grep -q "is ready"; then echo "The app has the update and waits for a tap (Android wants a confirmation)."; fi
+done
+report
+echo "::error::The app (build $(build)) did not update itself to build $want"
+exit 1
