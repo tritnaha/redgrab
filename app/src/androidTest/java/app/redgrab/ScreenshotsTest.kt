@@ -341,6 +341,19 @@ class ScreenshotsTest {
         device.pressBack()
     }
 
+    /** Following something on a site without following of its own: it shows in a row there, and can be undone. */
+    @Test fun followsOnOtherSites() = withApp { scenario, vm, _ ->
+        scenario.onActivity { vm.changeSource(OnlineSource.FikFap); if (!vm.followsOn(OnlineSource.FikFap, "sunset")) vm.toggleSiteFollow(OnlineSource.FikFap, "sunset") }
+        tab("Online")
+        await("Following")
+        await("sunset")
+        check(vm.followsOn(OnlineSource.FikFap, "SUNSET")) { "the follow wasn't kept: ${vm.siteFollows}" }
+        // It is part of the mix "All sites" shows when nothing is typed.
+        check(AllSites.feeds("", redGifs = false, reddit = false, personal = false, follows = vm.siteFollows).any { it.key == "FikFap|sunset" })
+        scenario.onActivity { vm.toggleSiteFollow(OnlineSource.FikFap, "sunset"); vm.changeSource(OnlineSource.RedGifs) }
+        check(!vm.followsOn(OnlineSource.FikFap, "sunset"))
+    }
+
     @Test fun whatsNew() = withApp { scenario, vm, _ ->
         // What an update shows: the versions that are new to you (here, the last two).
         val recent = vm.changelog.take(2)
