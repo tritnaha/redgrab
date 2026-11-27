@@ -11,9 +11,12 @@ set -euo pipefail
 NEW="$1"
 PKG=app.redgrab
 
+# Permissions are granted at install (-g). Otherwise the first start leaves Android's "allow notifications?"
+# dialog on top, and a later start is handed to that leftover dialog instead of bringing the app up.
 start() { # start <seconds to wait> <what this is>
   adb logcat -c
-  adb shell am start -W -n "$PKG/.MainActivity" > /dev/null
+  # -S: from a stopped app, as after a real update.
+  adb shell am start -W -S -n "$PKG/.MainActivity" > /dev/null
   sleep "$1"
   if adb logcat -d | grep -A3 "FATAL EXCEPTION" | grep -q "Process: $PKG"; then
     adb logcat -d | grep -A40 "FATAL EXCEPTION" | head -80
@@ -34,10 +37,10 @@ mkdir -p prev
 if gh release download --pattern '*.apk' --dir prev 2> /dev/null && ls prev/*.apk > /dev/null 2>&1; then
   old=$(ls prev/*.apk | head -1)
   echo "Updating from $(basename "$old")"
-  adb install "$old" > /dev/null
+  adb install -g "$old" > /dev/null
   start 20 "the last release"
   adb shell am force-stop "$PKG"
-  adb install -r "$NEW"
+  adb install -r -g "$NEW"
   adb shell dumpsys package "$PKG" | grep -m2 -E "versionName|versionCode" || true
   start 25 "this build, updated from the last release"
   adb shell am force-stop "$PKG"
@@ -46,7 +49,7 @@ if gh release download --pattern '*.apk' --dir prev 2> /dev/null && ls prev/*.ap
 else
   echo "No earlier release to update from; only the fresh install is checked."
 fi
-adb install "$NEW" > /dev/null
+adb install -g "$NEW" > /dev/null
 start 25 "this build, installed fresh"
 adb shell am force-stop "$PKG"
 start 15 "this build, installed fresh, started a second time"
