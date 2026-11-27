@@ -173,7 +173,7 @@ class ScreenshotsTest {
 
     private fun MainViewModel.showOnline(clips: List<Clip>) {
         val next = discover.copy(items = clips, page = 1, firstPage = 1, pages = 40, pageStarts = listOf(0), hasMore = false, loading = false, error = null)
-        MainViewModel::class.java.getDeclaredMethod("setDiscover", DiscoverState::class.java).apply { isAccessible = true }.invoke(this, next)
+        discover = next
     }
 
     /** Opens the app with the sample library and hands over its view model once the first screen is up. */
@@ -344,7 +344,7 @@ class ScreenshotsTest {
     @Test fun whatsNew() = withApp { scenario, vm, _ ->
         // What an update shows: the versions that are new to you (here, the last two).
         val recent = vm.changelog.take(2)
-        scenario.onActivity { MainViewModel::class.java.getDeclaredMethod("setWhatsNew", List::class.java).apply { isAccessible = true }.invoke(vm, recent) }
+        scenario.onActivity { vm.whatsNew = recent }
         await("What's new")
         shot("v13-whats-new")
     }

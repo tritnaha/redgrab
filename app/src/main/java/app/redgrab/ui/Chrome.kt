@@ -1,5 +1,6 @@
 package app.redgrab.ui
 
+import app.redgrab.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
