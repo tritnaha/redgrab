@@ -108,7 +108,8 @@ fun DiscoverScreen(vm: MainViewModel, onSignIn: () -> Unit, onOpenSettings: () -
     val s by vm.state.collectAsStateWithLifecycle()
     val d = vm.discover
     val source = d.feed.source
-    val grid = rememberLazyStaggeredGridState()
+    // Kept in the view model, so the place in a feed survives a visit to another tab.
+    val grid = vm.onlineGrid
     val keyboard = LocalSoftwareKeyboardController.current
     var query by rememberSaveable(d.feed) { mutableStateOf(d.feed.query) }
     val byId = remember(s.clips) { s.clips.associateBy { it.id } }
@@ -130,7 +131,12 @@ fun DiscoverScreen(vm: MainViewModel, onSignIn: () -> Unit, onOpenSettings: () -
     // Load the next page shortly before the end of the list.
     val nearEnd by remember { derivedStateOf { (grid.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0) >= grid.layoutInfo.totalItemsCount - 9 } }
     LaunchedEffect(nearEnd, d.items.size) { if (nearEnd && d.items.isNotEmpty()) vm.loadMoreDiscover() }
-    LaunchedEffect(d.feed, d.order, d.firstPage) { grid.scrollToItem(0) }
+    // A different feed, order or page starts at the top; coming back to the same one doesn't.
+    LaunchedEffect(d.feed, d.order, d.firstPage) {
+        val key = Triple(d.feed, d.order, d.firstPage)
+        if (vm.onlineGridFor != key) { if (vm.onlineGridFor != null) grid.scrollToItem(0); vm.onlineGridFor = key }
+    }
+    val spot = followClipView(vm, grid, remember(d.items) { d.items.map { it.id } })
 
     BackHandler(enabled = !home) { vm.openFeed(vm.homeFeed(source)) }
     var showPrefs by remember { mutableStateOf(false) }
@@ -218,9 +224,11 @@ fun DiscoverScreen(vm: MainViewModel, onSignIn: () -> Unit, onOpenSettings: () -
                 Icon(Icons.Default.VisibilityOff, null, Modifier.size(48.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
                 Spacer(Modifier.height(12.dp))
                 Text("Online browsing is paused in SFW mode", style = MaterialTheme.typography.titleMedium, textAlign = TextAlign.Center)
-                Text("Nothing is loaded while SFW mode is on. Turn it off with the eye icon on the Saved tab.",
+                Text("Nothing is loaded while SFW mode is on.",
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                     textAlign = TextAlign.Center, modifier = Modifier.padding(top = 4.dp))
+                Spacer(Modifier.height(12.dp))
+                Button(onClick = { vm.changeSfw(false) }) { Text("Turn off SFW mode") }
             }
             return@Scaffold
         }
@@ -278,14 +286,23 @@ fun DiscoverScreen(vm: MainViewModel, onSignIn: () -> Unit, onOpenSettings: () -
             if (source == OnlineSource.RedGifs && (vm.tagSuggestions.isNotEmpty() || vm.nicheSuggestions.isNotEmpty())) {
                 item(span = StaggeredGridItemSpan.FullLine) {
                     CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides 40.dp) {
-                        LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp), contentPadding = PaddingValues(horizontal = m.head)) {
-                            items(vm.nicheSuggestions, key = { "n" + it.id }) { n ->
-                                AssistChip(onClick = { keyboard?.hide(); vm.suggest(""); vm.openFeed(Feed.Niche(n.id, n.name)) },
-                                    label = { Text(n.name, maxLines = 1) }, leadingIcon = { Icon(Icons.Default.Public, null, Modifier.size(16.dp)) })
+                        // Two rows, each named for what it holds: a niche is a community with its own feed, a tag is a word on clips.
+                        Column {
+                            if (vm.nicheSuggestions.isNotEmpty()) LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp), contentPadding = PaddingValues(horizontal = m.head),
+                                verticalAlignment = Alignment.CenterVertically) {
+                                item(key = "niches-label") { Text("Niches", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary) }
+                                items(vm.nicheSuggestions, key = { "n" + it.id }) { n ->
+                                    AssistChip(onClick = { keyboard?.hide(); vm.suggest(""); vm.openFeed(Feed.Niche(n.id, n.name)) },
+                                        label = { Text("${n.name} · ${Format.count(n.subscribers)}", maxLines = 1) })
+                                }
                             }
-                            items(vm.tagSuggestions, key = { "t" + it.text }) { t ->
-                                AssistChip(onClick = { keyboard?.hide(); vm.suggest(""); vm.openFeed(Feed.Search(t.text)) },
-                                    label = { Text("${t.text} · ${Format.count(t.clips)}", maxLines = 1) })
+                            if (vm.tagSuggestions.isNotEmpty()) LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp), contentPadding = PaddingValues(horizontal = m.head),
+                                verticalAlignment = Alignment.CenterVertically) {
+                                item(key = "tags-label") { Text("Tags", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary) }
+                                items(vm.tagSuggestions, key = { "t" + it.text }) { t ->
+                                    AssistChip(onClick = { keyboard?.hide(); vm.suggest(""); vm.openFeed(Feed.Search(t.text)) },
+                                        label = { Text("#${t.text} · ${Format.count(t.clips)}", maxLines = 1) })
+                                }
                             }
                         }
                     }
@@ -331,8 +348,32 @@ fun DiscoverScreen(vm: MainViewModel, onSignIn: () -> Unit, onOpenSettings: () -
                 }
             } else if (source == OnlineSource.RedGifs && d.nichesLoaded && home) {
                 item(span = StaggeredGridItemSpan.FullLine) {
-                    Text("Follow niches to fill “My niches”.",
+                    Text("Follow niches or tags to fill “My feed”.",
                         style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = head)
+                }
+            }
+            // Tags you follow (kept in the app): one tap opens the tag.
+            if (source == OnlineSource.RedGifs && vm.followedTags.isNotEmpty() && (home || d.feed is Feed.Search)) {
+                item(span = StaggeredGridItemSpan.FullLine) {
+                    CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides 40.dp) {
+                        LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp), contentPadding = PaddingValues(horizontal = m.head), verticalAlignment = Alignment.CenterVertically) {
+                            item(key = "followed-tags-label") { Text("Tags you follow", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary) }
+                            items(vm.followedTags, key = { "ft$it" }) { t ->
+                                FilterChip((d.feed as? Feed.Search)?.query.equals(t, ignoreCase = true), { vm.openFeed(Feed.Search(t)) }, { Text("#$t", maxLines = 1) })
+                            }
+                        }
+                    }
+                }
+            }
+            // A search for words: follow them as a tag from here.
+            (d.feed as? Feed.Search)?.takeIf { it.query.isNotBlank() }?.let { f ->
+                item(span = StaggeredGridItemSpan.FullLine) {
+                    Row(head, verticalAlignment = Alignment.CenterVertically) {
+                        Text("#${f.query}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f),
+                            maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        if (vm.followsTag(f.query)) androidx.compose.material3.OutlinedButton(onClick = { vm.toggleTag(f.query) }) { Text("Following tag") }
+                        else androidx.compose.material3.FilledTonalButton(onClick = { vm.toggleTag(f.query) }) { Text("Follow tag") }
+                    }
                 }
             }
             // A niche's own feed: follow it from here.
@@ -360,6 +401,7 @@ fun DiscoverScreen(vm: MainViewModel, onSignIn: () -> Unit, onOpenSettings: () -
                 OnlineTile(c, wall = vm.wall, corner = m.corner, compact = gridColumns(vm.columns) >= 5, liked = mine?.liked == true, inCollection = mine != null && mine.colIds.isNotEmpty(),
                     saved = c.id in s.saved, sfw = vm.sfw,
                     preview = if (isPreviewing(moving, c.id)) ({ VideoPreview(vm, mine ?: c, streamOk, Modifier.fillMaxSize()) }) else null,
+                    spot = c.id == spot,
                 ) { vm.openOnlinePlayer(d.items, i) }
             }
             item(span = StaggeredGridItemSpan.FullLine) {
@@ -431,10 +473,11 @@ fun OnlinePill(modifier: Modifier = Modifier) {
 
 @Composable
 private fun OnlineTile(c: Clip, wall: Boolean, corner: Dp, compact: Boolean, liked: Boolean, inCollection: Boolean, saved: Boolean, sfw: Boolean,
-                       preview: (@Composable () -> Unit)?, onClick: () -> Unit) {
+                       preview: (@Composable () -> Unit)?, spot: Boolean = false, onClick: () -> Unit) {
     Box(
         Modifier.aspectRatio(tileAspect(c, wall)).clip(RoundedCornerShape(corner))
-            .background(MaterialTheme.colorScheme.surfaceContainerHigh).clickable(onClick = onClick),
+            .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+            .spotlit(spot, RoundedCornerShape(corner), Color.White).clickable(onClick = onClick),
     ) {
         AsyncImage(c.thumb, null, contentScale = ContentScale.Crop,
             modifier = Modifier.fillMaxSize().then(if (sfw) Modifier.blur(28.dp) else Modifier))

@@ -57,6 +57,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -122,7 +123,11 @@ class MainActivity : ComponentActivity() {
                     }
                 }
                 val snack = remember { SnackbarHostState() }
-                var tab by rememberSaveable { mutableIntStateOf(0) }
+                // Opens on what "Open on" in Settings says: the Saved tab, or Online.
+                var tab by rememberSaveable { mutableIntStateOf(startViewOf(vm.startView).first) }
+                // The tabs visited on the way here, for Back.
+                var tabTrail by rememberSaveable { mutableStateOf(listOf<Int>()) }
+                val goTo: (Int) -> Unit = { next -> if (next != tab) { tabTrail = (tabTrail + tab).takeLast(8); tab = next } }
                 val logVersion by AppLog.version.collectAsStateWithLifecycle()
                 val errorCount by AppLog.errors.collectAsStateWithLifecycle()
                 var seenErrors by rememberSaveable { mutableIntStateOf(0) }
@@ -145,6 +150,13 @@ class MainActivity : ComponentActivity() {
                 val navPx = with(LocalDensity.current) { navPad.toPx() }
                 val gridTab = tab == 0 || tab == 4 // these pad their own scrolling content
                 // The log is opened from Settings; Back returns there.
+                // Back returns to the tab you came from (then to Saved) instead of leaving the app. Screens put their
+                // own Back on top of this (closing a search, leaving a niche). From the Saved tab Back leaves as usual.
+                BackHandler(vm.backToTabs && (tabTrail.isNotEmpty() || tab != 0)) {
+                    val prev = tabTrail.lastOrNull() ?: 0
+                    tabTrail = tabTrail.dropLast(1)
+                    tab = prev
+                }
                 BackHandler(tab == 2) { tab = 3 }
                 val nav = listOf(
                     NavItem(0, "Saved", Icons.Default.Smartphone),
@@ -158,15 +170,15 @@ class MainActivity : ComponentActivity() {
                     Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
                         Box(Modifier.fillMaxSize().padding(bottom = if (gridTab) 0.dp else navPad).consumeWindowInsets(WindowInsets.navigationBars)) {
                             when (tab) {
-                                0 -> LibraryScreen(vm, snack, onSignIn = openSignIn, onOpenSettings = { tab = 3 })
-                                1 -> BrowseScreen(vm, onOpen = { tab = 0 })
+                                0 -> LibraryScreen(vm, snack, onSignIn = openSignIn, onOpenSettings = { goTo(3) })
+                                1 -> BrowseScreen(vm, onOpen = { goTo(0) })
                                 2 -> LogScreen(snack, onBack = { tab = 3 })
-                                4 -> DiscoverScreen(vm, onSignIn = openSignIn, onOpenSettings = { tab = 3 })
+                                4 -> DiscoverScreen(vm, onSignIn = openSignIn, onOpenSettings = { goTo(3) })
                                 else -> SettingsScreen(vm, onSignIn = openSignIn, onOpenLog = { tab = 2 }, logHasErrors = hasNewErrors)
                             }
                         }
                         SnackbarHost(snack, Modifier.align(Alignment.BottomCenter).padding(bottom = navPad))
-                        CompactNavBar(nav, selected = if (tab == 2) 3 else tab, systemInset = navInset, onSelect = { tab = it },
+                        CompactNavBar(nav, selected = if (tab == 2) 3 else tab, systemInset = navInset, onSelect = { goTo(it) },
                             modifier = Modifier.align(Alignment.BottomCenter).offset { IntOffset(0, (chrome.hidden * navPx).roundToInt()) })
                     }
                 }
@@ -176,8 +188,8 @@ class MainActivity : ComponentActivity() {
                 vm.player?.let { PlayerScreen(vm, it) }
                 vm.editing?.let { EditorScreen(vm, it) }
                 vm.editingInfo?.let { InfoEditor(vm, it) }
-                LaunchedEffect(vm.facet) { if (vm.facet != null) tab = 0 }
-                LaunchedEffect(vm.discoverRequests) { if (vm.discoverRequests > 0) tab = 4 }
+                LaunchedEffect(vm.facet) { if (vm.facet != null) goTo(0) }
+                LaunchedEffect(vm.discoverRequests) { if (vm.discoverRequests > 0) goTo(4) }
 
                 vm.shareChoice?.let { (clips, apps) ->
                     AlertDialog(
@@ -240,5 +252,10 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onStart() { super.onStart(); RedGrabApp.inFront = true }
-    override fun onStop() { RedGrabApp.inFront = false; super.onStop() }
+    override fun onStop() {
+        RedGrabApp.inFront = false
+        // When the app was left: "start in SFW mode" applies only after a real absence.
+        vm.library.prefs.lastLeftAt = System.currentTimeMillis()
+        super.onStop()
+    }
 }

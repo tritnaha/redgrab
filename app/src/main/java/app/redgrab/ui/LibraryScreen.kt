@@ -125,6 +125,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.clickable
+import kotlinx.coroutines.flow.first
 import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.LocalMinimumInteractiveComponentSize
 import androidx.compose.runtime.CompositionLocalProvider
@@ -201,7 +203,26 @@ fun LibraryScreen(vm: MainViewModel, snack: SnackbarHostState, onSignIn: () -> U
     val newHere = counts[0]; val savedHere = counts[1]; val hdHere = counts[2]; val sdHere = counts[3]; val editedHere = counts[4]
 
     // One layout for both modes: "Grid" gives every tile the same shape, "Wall" each clip's own.
-    val gridState = rememberLazyStaggeredGridState()
+    // Kept in the view model, so the position survives a visit to another tab.
+    val gridState = vm.savedGrid
+    val shownIds = remember(shown) { shown.map { it.id } }
+    val spot = followClipView(vm, gridState, shownIds)
+    // Coming back after the app was closed: return to the clip that was at the top when it was left.
+    LaunchedEffect(Unit) {
+        if (!vm.restoreSavedTop) return@LaunchedEffect
+        vm.restoreSavedTop = false
+        val at = shownIds.indexOf(vm.library.prefs.savedTop ?: return@LaunchedEffect)
+        if (at <= 0) return@LaunchedEffect
+        val total = androidx.compose.runtime.snapshotFlow { gridState.layoutInfo.totalItemsCount }.first { it >= shownIds.size }
+        gridState.scrollToItem((total - shownIds.size).coerceAtLeast(0) + at)
+    }
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    androidx.compose.runtime.DisposableEffect(lifecycleOwner) {
+        fun remember() { gridState.layoutInfo.visibleItemsInfo.firstOrNull { it.key in shownIdSet(shownIds) }?.let { vm.library.prefs.savedTop = it.key as? String } }
+        val obs = androidx.lifecycle.LifecycleEventObserver { _, ev -> if (ev == androidx.lifecycle.Lifecycle.Event.ON_STOP) remember() }
+        lifecycleOwner.lifecycle.addObserver(obs)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(obs) }
+    }
     val m = gridMetrics(vm.wall)
     val navPad = LocalNavPad.current
     // Both bars slide away while you scroll down and come back when you scroll up.
@@ -459,6 +480,7 @@ fun LibraryScreen(vm: MainViewModel, snack: SnackbarHostState, onSignIn: () -> U
                         sfw = vm.sfw,
                         failed = clip.id in s.failed,
                         dead = clip.id in s.dead,
+                        spot = clip.id == spot,
                         downloading = dlRunning && dlCurrent == clip.id,
                         selected = clip.id in vm.selection,
                         selecting = selecting,
@@ -516,7 +538,20 @@ fun LibraryScreen(vm: MainViewModel, snack: SnackbarHostState, onSignIn: () -> U
         AlertDialog(
             onDismissRequest = { confirmSaveAll = false },
             title = { Text("Save %,d clips?".format(s.newCount)) },
-            text = { Text("Everything that isn't on this phone yet is downloaded in the background. You can pause it at any time.") },
+            text = {
+                Column {
+                    Text("Downloaded in the background. You can pause it at any time.")
+                    // The same setting as in Settings → Downloads.
+                    Row(Modifier.fillMaxWidth().padding(top = 8.dp).clickable { vm.changeMobileData(!vm.mobileData) }, verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text("Use mobile data")
+                            Text(if (vm.mobileData) "Can use a lot of data." else "Off: waits for Wi-Fi.", style = MaterialTheme.typography.bodySmall,
+                                color = if (vm.mobileData) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        androidx.compose.material3.Switch(vm.mobileData, vm::changeMobileData)
+                    }
+                }
+            },
             confirmButton = { TextButton(onClick = { confirmSaveAll = false; vm.downloadAllNew() }) { Text("Save all") } },
             dismissButton = { TextButton(onClick = { confirmSaveAll = false }) { Text("Cancel") } },
         )
@@ -605,7 +640,7 @@ private fun DownloadCard(p: DownloadProgress, failedCount: Int, vm: MainViewMode
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun ClipTile(
-    clip: Clip, unseen: Boolean, thumb: Any?, wall: Boolean, corner: Dp, compact: Boolean, preview: (@Composable () -> Unit)?, saved: Boolean, qualities: Set<Quality>, partial: Boolean, sfw: Boolean, failed: Boolean, dead: Boolean = false, downloading: Boolean,
+    clip: Clip, unseen: Boolean, thumb: Any?, wall: Boolean, corner: Dp, compact: Boolean, preview: (@Composable () -> Unit)?, saved: Boolean, qualities: Set<Quality>, partial: Boolean, sfw: Boolean, failed: Boolean, dead: Boolean = false, spot: Boolean = false, downloading: Boolean,
     selected: Boolean, selecting: Boolean, onClick: () -> Unit, onLongClick: () -> Unit,
 ) {
     val haptic = LocalHapticFeedback.current
@@ -618,6 +653,8 @@ private fun ClipTile(
             .clip(shape)
             .background(MaterialTheme.colorScheme.surfaceContainerHigh)
             .then(if (selected) Modifier.border(3.dp, MaterialTheme.colorScheme.primary, shape) else Modifier)
+            // The clip that is open (or was a moment ago) in the clip view.
+            .spotlit(spot && !selected, shape, Color.White)
             .combinedClickable(
                 onClick = onClick,
                 onLongClick = { haptic.performHapticFeedback(HapticFeedbackType.LongPress); onLongClick() },
@@ -728,3 +765,6 @@ private fun EmptyHint(neverSynced: Boolean) {
             textAlign = TextAlign.Center, modifier = Modifier.padding(horizontal = 40.dp, vertical = 4.dp))
     }
 }
+
+/** The IDs as a set, for telling a clip's tile from the grid's header items. */
+private fun shownIdSet(ids: List<String>): Set<String> = ids.toHashSet()

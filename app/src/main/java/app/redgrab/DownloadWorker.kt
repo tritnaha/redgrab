@@ -200,6 +200,8 @@ class DownloadWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(c
         val todo = lib.readQueue().mapNotNull { line ->
             val parts = line.split(" ")
             val clip = byId[parts[0]]?.takeIf { !it.isCopy && !it.imported && !it.isImage } ?: return@mapNotNull null
+            // Deleted on its site: nothing to fetch. (Asking for one again by hand clears that mark first.)
+            if (clip.id in lib.state.value.dead) return@mapNotNull null
             if (api == null && OnlineSource.of(clip.id) == OnlineSource.RedGifs) return@mapNotNull null
             val asked = parts.getOrNull(1)?.let { runCatching { Quality.valueOf(it) }.getOrNull() }
             val have = lib.state.value.qualities[clip.id] ?: emptySet()
@@ -256,6 +258,8 @@ class DownloadWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(c
                     }
                     lib.markSaved(clip.id, quality)
                     finishedOk++
+                    // Its small preview copy is made straight away, so the grid can play it at once.
+                    runCatching { lib.fileUri(quality.fileName(clip.id))?.let { PreviewMaker.request(applicationContext, clip, it, onScreen = false) } }
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: AuthException) {
@@ -341,7 +345,10 @@ class DownloadWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(c
         AppLog.i("Download finished: $msg (${Format.size(runBytes)})")
         lib.updateDownload { progress.copy(running = false, currentId = null, etaSec = -1, message = msg) }
         // A run that only found deleted clips has nothing worth a notification.
-        if (finishedOk > 0 || progress.failed > 0 || stoppedForAuth || needsCheck != null || gone == 0)
+        // A "finished" notification is for when you aren't looking: not while the app is on screen (it shows the
+        // result itself), and not for a single clip. Something that needs you (a check, a sign-in) is always said.
+        val needsYou = stoppedForAuth || needsCheck != null
+        if (needsYou || (!RedGrabApp.inFront && todo.size > 1 && (finishedOk > 0 || progress.failed > 0)))
             notifyDone(Notices.done(finishedOk, progress.failed, needsCheck != null, stoppedForAuth))
         if (stoppedForAuth || needsCheck != null) Result.failure() else Result.success()
     }

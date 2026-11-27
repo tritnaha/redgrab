@@ -117,6 +117,17 @@ fun visibleClips(s: LibraryState, filter: Filter, query: String, facet: Facet?, 
 fun syncIsFresh(lastSynced: Long, maxAgeHours: Int, now: Long = System.currentTimeMillis()): Boolean =
     maxAgeHours > 0 && lastSynced in 1..now && now - lastSynced < maxAgeHours * 3_600_000L
 
+/** Whether the app has been out of use long enough (five minutes) for "start in SFW mode" to apply. Never left, or a clock set back, counts as long enough. */
+fun awayLongEnough(lastLeftAt: Long, now: Long = System.currentTimeMillis()): Boolean =
+    lastLeftAt <= 0 || now < lastLeftAt || now - lastLeftAt > 5 * 60_000L
+
+/** Which tab and site the app opens on, from the "Open on" setting: (tab, site or null for the one used last). */
+fun startViewOf(setting: String): Pair<Int, OnlineSource?> = when {
+    setting == "online" -> 4 to null
+    setting.startsWith("online:") -> 4 to OnlineSource.entries.firstOrNull { it.name == setting.removePrefix("online:") }
+    else -> 0 to null
+}
+
 /** "My niches" was asked for, but you follow none. */
 class NoNichesException : java.io.IOException("You follow no niches yet")
 
@@ -142,9 +153,9 @@ sealed interface Feed {
     val numbered: Boolean get() = false
 
     // RedGifs
-    /** One feed made from the niches you follow (see NicheMix). */
+    /** One feed made from the niches and tags you follow (see NicheMix). */
     data object MyNiches : Feed {
-        override val title get() = "My niches"
+        override val title get() = "My feed"
         override val source get() = OnlineSource.RedGifs
     }
     /** What the site's home page shows you when signed in. */
@@ -329,7 +340,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         private set
     var adv by mutableStateOf(AdvFilters())
     var discover by mutableStateOf(DiscoverState(feed = Feed.home(
-        OnlineSource.entries.firstOrNull { it.name == prefs.onlineSource } ?: OnlineSource.RedGifs)))
+        startViewOf(prefs.startView).second ?: OnlineSource.entries.firstOrNull { it.name == prefs.onlineSource } ?: OnlineSource.RedGifs)))
         private set
     /** Recently opened subreddits / hashtags / searches of the source on screen. */
     var recents by mutableStateOf(prefs.recent(discover.feed.source.name))
@@ -388,7 +399,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         private set
     var themeId by mutableStateOf(prefs.theme)
         private set
-    var sfw by mutableStateOf(if (prefs.sfwOnStart) true.also { prefs.sfw = true } else prefs.sfw)
+    // "Start in SFW mode" is for opening the app after being away, not for coming straight back from
+    // another app: Android may rebuild the screen in between, which used to switch SFW on each time.
+    var sfw by mutableStateOf(if (prefs.sfwOnStart && awayLongEnough(prefs.lastLeftAt)) true.also { prefs.sfw = true } else prefs.sfw)
         private set
     var sfwOnStart by mutableStateOf(prefs.sfwOnStart)
         private set
@@ -529,7 +542,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * never done under your hands).
      */
     private fun lookForUpdate() {
-        if (!prefs.autoUpdate || !isOnline() || System.currentTimeMillis() - prefs.lastUpdateCheck < 6 * 3_600_000L) return
+        if (!prefs.autoUpdate || !isOnline() || System.currentTimeMillis() - prefs.lastUpdateCheck < 3_600_000L) return
         viewModelScope.launch { UpdateWorker.updateNow(getApplication(), installIfIdle = false) }
     }
 
@@ -724,6 +737,28 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun changeSfwOnStart(v: Boolean) { prefs.sfwOnStart = v; sfwOnStart = v }
+
+    // ---- where you were ------------------------------------------------------------------
+
+    /** The grids' scroll positions live here, so they survive going to another tab and back. */
+    val savedGrid = androidx.compose.foundation.lazy.staggeredgrid.LazyStaggeredGridState()
+    val onlineGrid = androidx.compose.foundation.lazy.staggeredgrid.LazyStaggeredGridState()
+    /** The feed the Online grid was last scrolled for; it only jumps to the top when this changes. */
+    var onlineGridFor: Any? = null
+    /** True until the Saved grid has gone back to where it was when the app was last left. */
+    var restoreSavedTop = true
+
+    var backToTabs by mutableStateOf(prefs.backToTabs)
+        private set
+    fun changeBackToTabs(v: Boolean) { prefs.backToTabs = v; backToTabs = v }
+    var startView by mutableStateOf(prefs.startView)
+        private set
+    fun changeStartView(v: String) { prefs.startView = v; startView = v }
+
+    /** Mobile data may be used for syncing and saving many clips at once (off = those wait for Wi-Fi). */
+    var mobileData by mutableStateOf(!prefs.syncWifiOnly)
+        private set
+    fun changeMobileData(v: Boolean) { prefs.syncWifiOnly = !v; mobileData = v; syncWifiOnly = !v; SyncWorker.schedule(getApplication()) }
     fun changeVolumeGuard(v: Boolean) { prefs.volumeGuard = v; volumeGuard = v }
     fun changeVolumeLimit(v: Int) { prefs.volumeLimit = v; volumeLimit = v }
     fun changeTheme(id: String) { prefs.theme = id; themeId = id }
@@ -849,7 +884,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             !hasFolder || library.folder() == null -> say("Choose a save folder first (Settings → Save folder).")
             // Only RedGifs clips need the RedGifs sign-in.
             !prefs.signedIn && ids.any { OnlineSource.of(it.substringBefore(' ')) == OnlineSource.RedGifs } -> say("Sign in first.")
-            !DownloadWorker.start(getApplication(), ids) -> say("A download is already running. It will finish first.")
+            // One clip you asked for is fetched on whatever connection there is; many at once follow the mobile-data setting.
+            !DownloadWorker.start(getApplication(), ids, wifiOnly = ids.size > 1 && !mobileData) -> say("A download is already running. It will finish first.")
             else -> {}
         }
     }
@@ -1153,6 +1189,19 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun follows(nicheId: String) = discover.niches.any { it.id == nicheId }
 
+    /** Tags you follow (kept in the app; they are part of "My feed"). */
+    var followedTags by mutableStateOf(prefs.followedTags)
+        private set
+    fun followsTag(tag: String) = followedTags.any { it.equals(tag.trim(), ignoreCase = true) }
+    fun toggleTag(tag: String) {
+        val t = tag.trim()
+        if (t.isEmpty()) return
+        prefs.followedTags = if (followsTag(t)) followedTags.filter { !it.equals(t, ignoreCase = true) } else followedTags + t
+        followedTags = prefs.followedTags
+        if (followedTags.isNotEmpty()) noNiches = false
+        if (discover.feed == Feed.MyNiches) openFeed(Feed.MyNiches)
+    }
+
     /** Follows or stops following a niche on your RedGifs account. */
     fun toggleFollow(n: NicheInfo) {
         if (n.id in followBusy) return
@@ -1345,12 +1394,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     followed = withRedGifs(getApplication()) { it.followedNiches() }
                     withContext(Dispatchers.Main) { discover = discover.copy(niches = followed, nichesLoaded = true) }
                 }
-                if (followed.isEmpty()) throw NoNichesException()
+                // Niches (followed on RedGifs) and tags (followed in the app) take turns alike.
+                val tags = followedTags
+                if (followed.isEmpty() && tags.isEmpty()) throw NoNichesException()
                 redgifs { api, x ->
-                    // A few clips from each niche in turn. One niche failing doesn't spoil the page; a lapsed sign-in still does.
-                    val parts = NicheMix.plan(next, followed.map { it.id }).map { (id, p) ->
-                        try { api.nicheClips(id, OnlineOrder.Trending, p, x, count = NicheMix.PER_NICHE) }
-                        catch (e: HttpException) { AppLog.w("My niches: $id page $p: ${e.message}"); null }
+                    // A few clips from each in turn. One of them failing doesn't spoil the page; a lapsed sign-in still does.
+                    val parts = NicheMix.plan(next, followed.map { "n:" + it.id } + tags.map { "t:$it" }).map { (key, p) ->
+                        try {
+                            if (key.startsWith("n:")) api.nicheClips(key.drop(2), OnlineOrder.Trending, p, x, count = NicheMix.PER_NICHE)
+                            else api.searchClips(key.drop(2), OnlineOrder.Trending, p, x, count = NicheMix.PER_NICHE)
+                        } catch (e: HttpException) { AppLog.w("My feed: $key page $p: ${e.message}"); null }
                     }
                     OnlinePage(NicheMix.interleave(parts.map { it?.clips ?: emptyList() }), next, 0, more = parts.any { it != null && it.hasMore })
                 }
@@ -1544,6 +1597,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         refreshPartialInfo()
         runCatching { library.adoptImported() }
         runCatching { library.backfillThumbs() }
+        // Every saved clip gets its small preview copy without being asked for (they are made in the background, one at a time).
+        if (prefs.previewCopies) runCatching { PreviewMaker.requestAll(getApplication<Application>()) }
     }
 
     /** Moves the GIFs and videos of a folder you picked into RedGrab and lists them as "Imported". */

@@ -368,11 +368,11 @@ class RedGifsApi(private val token: String, private val userAgent: String,
     suspend fun forYou(page: Int, extras: FeedExtras): OnlinePage = onlinePage("v2/feeds/for-you?page=$page&count=40", page, extras)
 
     /** Site-wide search by free text; an empty query gives the general feed in that order. */
-    suspend fun searchClips(query: String, order: OnlineOrder, page: Int, extras: FeedExtras): OnlinePage {
+    suspend fun searchClips(query: String, order: OnlineOrder, page: Int, extras: FeedExtras, count: Int = 40): OnlinePage {
         val q = if (query.isBlank()) "" else "&query=${enc(query.trim())}"
         // The search endpoint calls "newest" `latest`.
         val o = if (order == OnlineOrder.New) "latest" else order.api
-        return onlinePage("v2/gifs/search?type=g&count=40&page=$page&order=$o$q", page, extras)
+        return onlinePage("v2/gifs/search?type=g&count=${count.coerceIn(10, 100)}&page=$page&order=$o$q", page, extras)
     }
 
     /** A creator's clips. */

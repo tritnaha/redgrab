@@ -102,7 +102,12 @@ object Updater {
         _state.value = State.Checking
         try {
             val http = RedGifsApi.clientFor(ctx.userAgent)
-            val token = prefs.githubToken
+            var token = prefs.githubToken
+            // Releases of a public repository need no token. One that GitHub no longer accepts must not get in the way.
+            if (!token.isNullOrBlank()) {
+                val refused = http.newCall(request("$API/releases/latest", token, "application/vnd.github+json").build()).execute().use { it.code == 401 || it.code == 403 }
+                if (refused) { AppLog.w("GitHub didn't accept the stored token; checking for updates without it"); token = null }
+            }
             http.newCall(request("$API/releases/latest", token, "application/vnd.github+json").build()).execute().use { r ->
                 val body = r.body?.string().orEmpty()
                 if (r.code == 404 && repoIsPublic(ctx) == true) {
@@ -247,10 +252,10 @@ class UpdateWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
         fun schedule(ctx: Context) {
             val wm = WorkManager.getInstance(ctx)
             if (!ctx.library.prefs.autoUpdate) { wm.cancelUniqueWork(NAME); return }
-            val req = PeriodicWorkRequestBuilder<UpdateWorker>(12, TimeUnit.HOURS)
+            val req = PeriodicWorkRequestBuilder<UpdateWorker>(6, TimeUnit.HOURS)
                 .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).setRequiresBatteryNotLow(true).build())
                 .build()
-            wm.enqueueUniquePeriodicWork(NAME, ExistingPeriodicWorkPolicy.KEEP, req)
+            wm.enqueueUniquePeriodicWork(NAME, ExistingPeriodicWorkPolicy.UPDATE, req)
         }
 
         /** Checks, downloads and (when the app isn't in front and nothing is downloading) installs. */
@@ -258,6 +263,13 @@ class UpdateWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
             val release = Updater.check(ctx) ?: return null
             if (!Updater.download(ctx, release)) return release
             if (installIfIdle && !RedGrabApp.inFront && !DownloadWorker.active) Updater.install(ctx, release)
+            // Found in the background but not installed now (a download is running): say so; opening the app offers it.
+            else if (installIfIdle && !RedGrabApp.inFront) runCatching {
+                val open = PendingIntent.getActivity(ctx, 8, Intent(ctx, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP), PendingIntent.FLAG_IMMUTABLE)
+                val n = Notices.builder(ctx, RedGrabApp.CH_DONE).setContentTitle("Update ${release.version} is ready").setContentText("Open the app to install it.")
+                    .setContentIntent(open).setAutoCancel(true).build()
+                ctx.getSystemService(NotificationManager::class.java).notify(8, n)
+            }
             return release
         }
     }

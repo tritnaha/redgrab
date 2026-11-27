@@ -130,6 +130,39 @@ class NichesTest {
         // The filter is about where a clip was found; it says nothing about it not being on the phone.
         assertEquals("From Online", Origin.Online.label)
         assertEquals(Feed.MyNiches, Feed.home(OnlineSource.RedGifs))
+        assertEquals("My feed", Feed.MyNiches.title)
         assertEquals("5.0K", Format.count(5000)); assertEquals("961K", Format.count(961_776)); assertEquals("1.2M", Format.count(1_234_567)); assertEquals("12", Format.count(12))
+    }
+
+    @Test fun sfwOnStartOnlyAfterARealAbsence() {
+        val now = 1_800_000_000_000L
+        assertTrue(awayLongEnough(0, now))                  // never left: a first start
+        assertFalse(awayLongEnough(now - 20_000, now))      // back from another app after twenty seconds
+        assertFalse(awayLongEnough(now - 4 * 60_000, now))
+        assertTrue(awayLongEnough(now - 6 * 60_000, now))
+        assertTrue(awayLongEnough(now + 60_000, now))       // the clock was set back
+    }
+
+    @Test fun openOnSettingPicksTabAndSite() {
+        assertEquals(0 to null, startViewOf("saved"))
+        assertEquals(4 to null, startViewOf("online"))
+        assertEquals(4 to OnlineSource.Reddit, startViewOf("online:Reddit"))
+        assertEquals(4 to null, startViewOf("online:Gone"))  // a site that no longer exists: Online, last site
+        assertEquals(0 to null, startViewOf(""))
+    }
+
+    @Test fun clipsDeletedOnTheirSiteAreNotCountedAsWaitingToBeSaved() {
+        fun clip(id: String) = Clip(id = id, hd = "https://x/$id.mp4", sd = null, thumb = null, duration = 5.0, width = 1, height = 1, hasAudio = false,
+            user = "", created = 0, sources = setOf("Liked"))
+        val s = LibraryState(clips = listOf(clip("a"), clip("b"), clip("c")), qualities = mapOf("a" to setOf(Quality.HD)),
+            failures = mapOf("b" to Failure("No longer on RedGifs", 1, 1, 1, dead = true)))
+        assertEquals(1, s.newCount)   // only "c" can still be saved
+        assertEquals(1, s.savedCount)
+    }
+
+    @Test fun followedTagsTakeTurnsWithNichesInTheMix() {
+        val keys = listOf("n:a", "n:b", "t:sunset")
+        assertEquals(listOf("n:a" to 1, "n:b" to 1, "t:sunset" to 1), NicheMix.plan(1, keys))
+        assertEquals(listOf("n:a" to 2, "n:b" to 2, "t:sunset" to 2), NicheMix.plan(2, keys))
     }
 }

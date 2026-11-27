@@ -6,6 +6,29 @@ time it opens after an update, and the whole list under Settings → About → W
 Each version has the sections it needs out of Added, Changed and Fixed, one line per change,
 and a link to the code that made it.
 
+## 13.9 (build 22) · 2026-11-27
+
+### Added
+- Settings → Navigation: Back goes to the previous tab instead of leaving the app, and "Open on" picks what the app starts with.
+- The grid follows the clip view: closing it leaves you at the clip you last saw, and that clip's tile is framed for a moment.
+- Follow tags as well as niches. Followed tags are kept in the app and are part of the home feed, now called "My feed".
+- Search suggestions are split into Niches and Tags.
+- "Use mobile data" is one setting, in Settings and in "Save all"; turning it on asks first.
+- Preview copies are made for every saved clip by themselves, and for a new clip as soon as it is saved.
+- A notification when an update was found in the background but couldn't be installed yet.
+
+### Changed
+- "Start in SFW mode" applies after more than five minutes away, not every time you come back from another app.
+- A finished-download notification only appears when the app isn't on screen and more than one clip was saved.
+- Updates are looked for when the app opens (at most hourly) and every six hours in the background.
+- The GitHub token moved to Troubleshooting and is marked optional. Updates never needed it; a token GitHub rejects no longer blocks them.
+
+### Fixed
+- Going to another tab and back lost your place in the Saved and Online grids.
+- The Online tab had no way to switch SFW mode off.
+- "N to save" counted clips that were deleted on their site, and they stayed in the download queue.
+- The Saved grid returns to where it was when the app was last closed.
+
 ## 13.8 (build 21) · 2026-11-27
 
 ### Added
@@ -18,6 +41,8 @@ and a link to the code that made it.
 ### Changed
 - Every clip opens in the same-sized card, so the place to tap doesn't move from clip to clip.
 - The "Online saves" filter is now "From Online": it says where a clip was found. Saved ones are under "On phone" as before.
+
+[Details](https://github.com/tritnaha/redgrab/commit/2745362)
 
 ## 13.7 (build 20) · 2026-11-26
 

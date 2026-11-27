@@ -34,6 +34,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
+import androidx.compose.foundation.border
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.unit.dp
 import app.redgrab.Clip
 import app.redgrab.Library
@@ -127,3 +130,30 @@ fun gridColumns(chosen: Int): Int {
     val c = androidx.compose.ui.platform.LocalConfiguration.current
     return columnsFor(chosen, c.screenWidthDp, c.screenHeightDp)
 }
+
+/**
+ * Keeps a grid in step with the clip view: while clips are paged through in it, the grid behind
+ * scrolls so that the clip on show is in view, and that clip's tile is marked (see [spotlit]).
+ * Closing the clip view therefore leaves you at the clip you last saw, not at the one you first
+ * tapped. The mark stays a few seconds after closing. Returns the ID to mark, or null.
+ * [ids] are the grid's clips in order; the grid's first items are headers, not clips.
+ */
+@androidx.compose.runtime.Composable
+fun followClipView(vm: app.redgrab.MainViewModel, grid: androidx.compose.foundation.lazy.staggeredgrid.LazyStaggeredGridState, ids: List<String>): String? {
+    val current = vm.player?.let { it.ids.getOrNull(it.index) }
+    var spot by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf<String?>(null) }
+    val list by androidx.compose.runtime.rememberUpdatedState(ids)
+    androidx.compose.runtime.LaunchedEffect(current) {
+        if (current == null) { kotlinx.coroutines.delay(3500); spot = null; return@LaunchedEffect }
+        spot = current
+        val at = list.indexOf(current)
+        if (at < 0 || grid.layoutInfo.visibleItemsInfo.any { it.key == current }) return@LaunchedEffect
+        val headers = (grid.layoutInfo.totalItemsCount - list.size).coerceAtLeast(0)
+        grid.scrollToItem(headers + at)
+    }
+    return spot
+}
+
+/** The mark on the tile of the clip that is (or was just) open: a bright frame. */
+fun androidx.compose.ui.Modifier.spotlit(on: Boolean, shape: androidx.compose.ui.graphics.Shape, color: androidx.compose.ui.graphics.Color): androidx.compose.ui.Modifier =
+    if (on) this.then(androidx.compose.ui.Modifier.border(androidx.compose.foundation.BorderStroke(3.dp, color), shape)) else this

@@ -19,6 +19,7 @@ import androidx.test.uiautomator.Until
 import org.junit.Test
 import org.junit.runner.RunWith
 import java.io.File
+import kotlinx.coroutines.launch
 import kotlin.math.PI
 import kotlin.math.sin
 import kotlin.random.Random
@@ -226,6 +227,46 @@ class ScreenshotsTest {
         tab("Browse niches")
         await("Most followed")
         shot("v13-niches")
+    }
+
+    // ---- behaviour checks (no pictures): things that only show on a device -------------------
+
+    /** Going to another tab and back keeps your place; Back returns to the tab you came from. */
+    @Test fun placeIsKeptAndBackGoesToThePreviousTab() = withApp { scenario, vm, _ ->
+        // Scrolled directly rather than by a swipe: an emulator without acceleration can't keep up with touch input.
+        scenario.onActivity { kotlinx.coroutines.MainScope().launch { vm.savedGrid.scrollToItem(12) } }
+        Thread.sleep(3000)
+        device.waitForIdle()
+        val before = vm.savedGrid.firstVisibleItemIndex
+        check(before > 0) { "the grid didn't scroll (at $before)" }
+        tab("Settings"); await("Account")
+        // The Saved tab's own title line ("17 on phone · …") stays put while the grid is scrolled.
+        fun awaitSaved() = check(device.wait(Until.hasObject(By.textContains("on phone")), 120_000)) { "the Saved tab didn't come up" }
+        tab("Saved"); awaitSaved()
+        Thread.sleep(1500)
+        check(vm.savedGrid.firstVisibleItemIndex == before) { "place lost: was at $before, now at ${vm.savedGrid.firstVisibleItemIndex}" }
+        // Back: from Settings to Saved, not out of the app.
+        tab("Settings"); await("Account")
+        device.pressBack()
+        awaitSaved()
+        check(vm.savedGrid.firstVisibleItemIndex == before) { "place lost after Back: was at $before, now at ${vm.savedGrid.firstVisibleItemIndex}" }
+        check(device.currentPackageName == app.packageName) { "Back left the app" }
+    }
+
+    /** Paging through clips in the clip view moves the grid behind it; closing leaves you at the last clip seen. */
+    @Test fun gridFollowsTheClipView() = withApp { scenario, vm, _ ->
+        val shown = visibleClips(vm.state.value, vm.filter, vm.query, vm.facet, vm.adv, vm.origin)
+        check(shown.size >= 16) { "only ${shown.size} sample clips" }
+        scenario.onActivity { vm.openPlayer(shown, 0) }
+        await("WhatsApp")
+        scenario.onActivity { repeat(15) { vm.movePlayer(1) } }
+        Thread.sleep(4000)
+        val target = shown[15].id
+        scenario.onActivity { vm.closePlayer() }
+        Thread.sleep(2500)
+        device.waitForIdle()
+        val visible = vm.savedGrid.layoutInfo.visibleItemsInfo.map { it.key }
+        check(target in visible) { "the last clip seen ($target) isn't on screen after closing; visible: $visible" }
     }
 
     @Test fun whatsNew() = withApp { scenario, vm, _ ->

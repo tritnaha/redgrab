@@ -248,6 +248,31 @@ class Prefs(context: Context) : RedditStore {
         get() = sp.getString("contentPrefs", null)?.split(',')?.filterTo(LinkedHashSet()) { it in ContentPrefs.ALL } ?: ContentPrefs.ALL.toSet()
         set(v) = sp.edit { putString("contentPrefs", v.filter { it in ContentPrefs.ALL }.joinToString(",")) }
 
+    /** When the app was last left (epoch millis); "start in SFW mode" only counts after a real absence. */
+    var lastLeftAt: Long
+        get() = sp.getLong("lastLeftAt", 0)
+        set(v) = sp.edit { putLong("lastLeftAt", v) }
+
+    /** The clip at the top of the Saved grid when the app was left, to come back to. */
+    var savedTop: String?
+        get() = sp.getString("savedTop", null)
+        set(v) = sp.edit { putString("savedTop", v) }
+
+    /** Back goes to the tab you were on before; off = Back leaves the app from any tab. */
+    var backToTabs: Boolean
+        get() = sp.getBoolean("backToTabs", true)
+        set(v) = sp.edit { putBoolean("backToTabs", v) }
+
+    /** What the app opens on: "saved", "online" (the site used last) or "online:<site>". */
+    var startView: String
+        get() = sp.getString("startView", "saved") ?: "saved"
+        set(v) = sp.edit { putString("startView", v) }
+
+    /** Tags you follow. RedGifs has no such thing on the account, so the list lives in the app. */
+    var followedTags: List<String>
+        get() = sp.getString("followedTags", null)?.split('\n')?.filter { it.isNotBlank() } ?: emptyList()
+        set(v) = sp.edit { putString("followedTags", v.map { it.trim().replace('\n', ' ') }.filter { it.isNotEmpty() }.distinctBy { it.lowercase() }.joinToString("\n")) }
+
     // ---- app lock ----
 
     /** Ask for the phone's own unlock (fingerprint, face, PIN, pattern, password) before showing the app. */

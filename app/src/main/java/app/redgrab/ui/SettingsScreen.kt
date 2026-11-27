@@ -77,6 +77,7 @@ import androidx.compose.material.icons.filled.Compress
 import app.redgrab.AppLock
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.foundation.horizontalScroll
 import app.redgrab.Format
 import app.redgrab.PreviewMaker
 import app.redgrab.MainViewModel
@@ -173,6 +174,16 @@ fun SettingsScreen(vm: MainViewModel, onSignIn: () -> Unit, onOpenLog: () -> Uni
                 }
             }
 
+            Section("Navigation") {
+                SwitchRow(Icons.Default.History, "Back goes to the previous tab",
+                    "Off: Back leaves the app from any tab.", vm.backToTabs, onChange = vm::changeBackToTabs)
+                Text("Open on", fontWeight = FontWeight.Medium, modifier = Modifier.padding(start = 16.dp, top = 4.dp))
+                Row(Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    val options = listOf("saved" to "Saved", "online" to "Online (last site)") + app.redgrab.OnlineSource.entries.map { "online:${it.name}" to it.label }
+                    options.forEach { (value, label) -> androidx.compose.material3.FilterChip(vm.startView == value, { vm.changeStartView(value) }, { Text(label) }) }
+                }
+            }
+
             Section("Privacy") {
                 val canLock = remember { AppLock.available(ctx) }
                 val confirm = LocalConfirmIdentity.current
@@ -196,7 +207,7 @@ fun SettingsScreen(vm: MainViewModel, onSignIn: () -> Unit, onOpenLog: () -> Uni
                     "Notifications never name a site or a clip and stay off the lock screen.",
                     vm.notifyDone, onChange = vm::changeNotifyDone)
                 SwitchRow(Icons.Default.Shield, "Start in SFW mode",
-                    "Turn SFW mode on every time RedGrab opens.", vm.sfwOnStart, onChange = vm::changeSfwOnStart)
+                    "On when RedGrab opens after more than five minutes away.", vm.sfwOnStart, onChange = vm::changeSfwOnStart)
                 SwitchRow(Icons.AutoMirrored.Filled.VolumeDown, "Speaker volume guard",
                     "When sound plays through the phone's own speaker (not Bluetooth or headphones), lower the volume to " +
                         "${vm.volumeLimit}% if it's higher. Pressing the volume keys overrides it until the app restarts.",
@@ -278,8 +289,7 @@ fun SettingsScreen(vm: MainViewModel, onSignIn: () -> Unit, onOpenLog: () -> Uni
                     else "Android runs the check roughly every ${vm.autoSyncHours} hours, even when the app is closed. If the RedGifs session has expired you get a notification to sign in.",
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(horizontal = 16.dp).padding(bottom = 8.dp))
-                if (vm.autoSyncHours > 0) SwitchRow(Icons.Default.Wifi, "Only on Wi-Fi",
-                    "Background checks and their downloads wait for Wi-Fi.", vm.syncWifiOnly, onChange = vm::changeSyncWifiOnly)
+                MobileDataRow(vm)
             }
 
             Section("Storage") {
@@ -406,16 +416,6 @@ fun SettingsScreen(vm: MainViewModel, onSignIn: () -> Unit, onOpenLog: () -> Uni
                     headlineContent = { Text("What's new") },
                     supportingContent = { Text("Changes in every version.") },
                 )
-                // Needed to send reports, and to read releases while the repository is private.
-                var token by remember(vm.githubToken) { mutableStateOf(vm.githubToken) }
-                OutlinedTextField(token, { token = it.trim() }, singleLine = true, label = { Text("GitHub token") },
-                    visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
-                    supportingText = { Text("For sending reports (Issues: read and write). Also needed for updates if the repository is private (Contents: read).") },
-                    modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 4.dp))
-                Row(Modifier.padding(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    if (token != vm.githubToken) Button(onClick = { vm.changeGithubToken(token) }) { Text("Save") }
-                    else if (token.isNotEmpty()) OutlinedButton(onClick = { vm.changeGithubToken("") }) { Text("Remove") }
-                }
             }
             Section("Troubleshooting") {
                 ListItem(
@@ -437,6 +437,16 @@ fun SettingsScreen(vm: MainViewModel, onSignIn: () -> Unit, onOpenLog: () -> Uni
                         else Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null)
                     },
                 )
+                // Only for filing a report as a GitHub issue from inside the app. Updates don't need it.
+                var token by remember(vm.githubToken) { mutableStateOf(vm.githubToken) }
+                OutlinedTextField(token, { token = it.trim() }, singleLine = true, label = { Text("GitHub token (optional)") },
+                    visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
+                    supportingText = { Text("Only for \"Send to GitHub\" in Report a problem (Issues: read and write). Updates work without it.") },
+                    modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 4.dp))
+                Row(Modifier.padding(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (token != vm.githubToken) Button(onClick = { vm.changeGithubToken(token) }) { Text("Save") }
+                    else if (token.isNotEmpty()) OutlinedButton(onClick = { vm.changeGithubToken("") }) { Text("Remove") }
+                }
             }
             Spacer(Modifier.height(24.dp))
         }
@@ -529,5 +539,25 @@ private fun SwitchRow(icon: ImageVector, title: String, body: String, checked: B
         headlineContent = { Text(title) },
         supportingContent = { Text(body) },
         trailingContent = { Switch(checked, onChange, enabled = enabled) },
+    )
+}
+
+/** One setting, shown here and in "Save all": whether syncing and saving many clips may use mobile data. Turning it on asks first. */
+@Composable
+fun MobileDataRow(vm: MainViewModel) {
+    var ask by remember { mutableStateOf(false) }
+    ListItem(
+        colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+        leadingContent = { Icon(Icons.Default.Wifi, null) },
+        headlineContent = { Text("Use mobile data") },
+        supportingContent = { Text(if (vm.mobileData) "Syncing and saving many clips may use mobile data." else "Off: syncing and saving many clips wait for Wi-Fi.") },
+        trailingContent = { Switch(vm.mobileData, { on -> if (on) ask = true else vm.changeMobileData(false) }) },
+    )
+    if (ask) AlertDialog(
+        onDismissRequest = { ask = false },
+        title = { Text("Use mobile data?") },
+        text = { Text("Clips are large. A sync can use several gigabytes.") },
+        confirmButton = { TextButton(onClick = { ask = false; vm.changeMobileData(true) }) { Text("Use mobile data") } },
+        dismissButton = { TextButton(onClick = { ask = false }) { Text("Cancel") } },
     )
 }
