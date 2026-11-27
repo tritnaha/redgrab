@@ -16,7 +16,9 @@
 #   updater    no secrets: after publishing, the release before is installed and has to update
 #              itself through the app's own updater (.github/scripts/updater-e2e.sh); can't hold a release up
 #
-# The emulator runs Android 16 (API 36); older versions are not tested.
+# The emulator runs Android 16 (API 36); older versions are not tested. The three emulator jobs run
+# on GitHub's standard Linux runner unless the repository variable EMULATOR_RUNNER names another
+# one: the label of a self-hosted runner with KVM, or of a larger GitHub runner.
 #
 # "Run workflow" with "smoke" ticked builds and tests without publishing anything; with "updater"
 # ticked it runs the in-app update test against the two latest releases.
@@ -127,7 +129,7 @@ jobs:
   test:
     needs: build
     if: needs.build.outputs.work == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.EMULATOR_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
@@ -189,7 +191,7 @@ jobs:
   behaviour:
     needs: build
     if: needs.build.outputs.work == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.EMULATOR_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 20
     continue-on-error: true
     steps:
@@ -222,7 +224,7 @@ jobs:
   updater:
     needs: [build, publish]
     if: always() && (needs.publish.result == 'success' || inputs.updater)
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.EMULATOR_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 20
     continue-on-error: true
     steps:
