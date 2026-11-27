@@ -68,6 +68,7 @@ fun MainViewModel.setFolder(uri: Uri) {
         .onFailure { AppLog.e("Could not keep folder permission", it) }
     prefs.folderUri = uri
     prefs.folderLabel = labelFor(uri)
+    privateStorage = PrivateDocs.isPrivate(uri)
     AppLog.i("Save folder set: ${prefs.folderLabel}")
     refreshFolderInfo()
     rescanFolder()
@@ -207,3 +208,46 @@ internal fun MainViewModel.friendly(e: Throwable, source: OnlineSource = OnlineS
     }
     else -> "Sync failed: ${e.message ?: e.javaClass.simpleName}"
 }
+
+/** Points the save folder at the app's own storage. */
+internal fun MainViewModel.usePrivateStorage() {
+    prefs.folderUri = PrivateDocs.TREE
+    prefs.folderLabel = "Inside the app"
+    privateStorage = true
+    refreshFolderInfo()
+}
+
+/**
+ * "Keep clips inside the app": moves everything from the save folder into the app's own storage in
+ * one go, then uses that from now on. Started again after an interruption, it carries on.
+ */
+fun MainViewModel.moveIntoApp() {
+    if (storageStatus != null || privateStorage) return
+    if (DownloadWorker.active) return say("Pause the download first.")
+    if (prefs.folderUri == null) { usePrivateStorage(); rescanFolder(force = true); return }
+    storageStatus = "Starting"
+    viewModelScope.launch(Dispatchers.IO) {
+        val r = runCatching { library.moveIntoApp { storageStatus = "Moving $it" } }
+        storageStatus = null
+        r.onSuccess { (moved, failed) ->
+            if (failed == 0) {
+                withContext(Dispatchers.Main) { usePrivateStorage(); rescanFolder(force = true) }
+                say("%,d file(s) moved into the app.".format(moved))
+            } else say("%,d moved, %,d couldn't be (see the log). Nothing is lost; run it again.".format(moved, failed))
+        }.onFailure { AppLog.e("Moving into the app failed", it); say("Couldn't move: ${it.message}") }
+    }
+}
+
+/** Copies every saved file into [to] as ordinary files. */
+fun MainViewModel.exportAll(to: Uri) {
+    if (storageStatus != null) return
+    storageStatus = "Starting"
+    viewModelScope.launch(Dispatchers.IO) {
+        runCatching { getApplication<Application>().contentResolver.takePersistableUriPermission(to, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION) }
+        val r = runCatching { library.exportTo(to) { storageStatus = "Exporting $it" } }
+        storageStatus = null
+        r.onSuccess { (copied, failed) -> say("%,d file(s) exported".format(copied) + if (failed > 0) ", %,d failed (see the log).".format(failed) else ".") }
+            .onFailure { AppLog.e("Export failed", it); say("Export failed: ${it.message}") }
+    }
+}
+

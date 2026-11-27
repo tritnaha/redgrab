@@ -308,6 +308,8 @@ fun Library.dropPartial(id: String) {
 
 fun Library.folder(): DocumentFile? {
     val uri: Uri = prefs.folderUri ?: return null
+    // The app's own storage is always there and writable; a chosen folder may have been removed or its permission withdrawn.
+    if (PrivateDocs.isPrivate(uri)) { PrivateDocs.dir(ctx); return runCatching { DocumentFile.fromTreeUri(ctx, uri) }.getOrNull() }
     return runCatching { DocumentFile.fromTreeUri(ctx, uri) }.getOrNull()?.takeIf { it.exists() && it.canWrite() }
 }
 

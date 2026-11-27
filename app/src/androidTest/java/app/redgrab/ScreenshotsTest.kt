@@ -344,6 +344,63 @@ class ScreenshotsTest {
         device.pressBack()
     }
 
+    /**
+     * Clips kept inside the app: the private store takes files through the same calls the save folder
+     * gets (create, write, list, read, rename, delete), a whole folder moves in at once with nothing
+     * lost, and export writes plain files back out.
+     */
+    @Test fun privateStorageKeepsMovesAndExports() {
+        val lib = app.library
+        val resolver = app.contentResolver
+        val before = lib.prefs.folderUri; val label = lib.prefs.folderLabel
+        PrivateDocs.dir(app).deleteRecursively()
+        try {
+            // The private store behaves like a save folder.
+            lib.prefs.folderUri = PrivateDocs.TREE
+            val folder = lib.folder() ?: error("the private store isn't usable as a save folder")
+            val part = folder.createFile("application/octet-stream", "clipone-hd.part") ?: error("no file created")
+            resolver.openOutputStream(part.uri, "wt")!!.use { it.write(ByteArray(5000) { 7 }) }
+            resolver.openOutputStream(part.uri, "wa")!!.use { it.write(ByteArray(3000) { 9 }) }
+            val done = android.provider.DocumentsContract.renameDocument(resolver, part.uri, "clipone-hd.mp4") ?: error("not renamed")
+            check(lib.listNames() == listOf("clipone-hd.mp4")) { "listing: ${lib.listNames()}" }
+            check(lib.listEntries().single().size == 8000L) { "size: ${lib.listEntries()}" }
+            check(lib.fileUri("clipone-hd.mp4")?.let(lib::exists) == true) { "the file isn't found by name" }
+            check(resolver.openInputStream(done)!!.use { it.readBytes() }.let { it.size == 8000 && it[0] == 7.toByte() && it[7999] == 9.toByte() })
+            check(File(PrivateDocs.dir(app), "clipone-hd.mp4").length() == 8000L)
+            // Nothing outside the folder can be reached through it.
+            check(runCatching { resolver.openInputStream(android.provider.DocumentsContract.buildDocumentUriUsingTree(PrivateDocs.TREE, "clips/../shared_prefs/redgrab.xml")) }.isFailure)
+            android.provider.DocumentsContract.deleteDocument(resolver, done)
+            check(lib.listNames().isEmpty())
+
+            // A folder of files, one in a sub-folder, moves in at once; the originals are gone afterwards.
+            val old = File(app.getExternalFilesDir(null), "oldfolder").apply { deleteRecursively(); mkdirs() }
+            File(old, "a-hd.mp4").writeBytes(ByteArray(4000) { 1 }); File(old, "b-sd.mp4").writeBytes(ByteArray(2500) { 2 })
+            File(old, "imported").mkdirs(); File(old, "imported/c.gif").writeBytes(ByteArray(900) { 3 }); File(old, ".nomedia").writeBytes(ByteArray(0))
+            // The old folder is reached as documents too: through the private store's own interface, one level up.
+            val oldTree = android.provider.DocumentsContract.buildTreeDocumentUri(PrivateDocs.AUTHORITY, "clips/old")
+            File(PrivateDocs.dir(app), "old").deleteRecursively(); old.copyRecursively(File(PrivateDocs.dir(app), "old")); old.deleteRecursively()
+            lib.prefs.folderUri = oldTree
+            val (moved, failed) = kotlinx.coroutines.runBlocking { lib.moveIntoApp { } }
+            check(moved == 3 && failed == 0) { "moved $moved, failed $failed" }
+            check(File(PrivateDocs.dir(app), "a-hd.mp4").length() == 4000L && File(PrivateDocs.dir(app), "imported/c.gif").length() == 900L) { "the moved files aren't in place" }
+            check(File(PrivateDocs.dir(app), "old").walkTopDown().none { it.isFile && it.name != ".nomedia" }) { "originals were left behind" }
+            File(PrivateDocs.dir(app), "old").deleteRecursively()
+
+            // Export: plain files, sub-folder kept, the app's own copies stay.
+            lib.prefs.folderUri = PrivateDocs.TREE
+            File(PrivateDocs.dir(app), "out").mkdirs()
+            val outTree = android.provider.DocumentsContract.buildTreeDocumentUri(PrivateDocs.AUTHORITY, "clips/out")
+            // (Exporting into a folder inside the store itself, which is all a test may write to; the walk must not copy its own output.)
+            val (copied, bad) = kotlinx.coroutines.runBlocking { lib.exportTo(outTree) { } }
+            check(bad == 0 && copied >= 3) { "exported $copied, failed $bad" }
+            check(File(PrivateDocs.dir(app), "out/a-hd.mp4").length() == 4000L && File(PrivateDocs.dir(app), "out/imported/c.gif").length() == 900L) { "exported files missing" }
+            check(File(PrivateDocs.dir(app), "a-hd.mp4").exists()) { "export removed the app's copy" }
+        } finally {
+            PrivateDocs.dir(app).deleteRecursively()
+            lib.prefs.folderUri = before; lib.prefs.folderLabel = label
+        }
+    }
+
     /** Following something on a site without following of its own: it shows in a row there, and can be undone. */
     @Test fun followsOnOtherSites() = withApp { scenario, vm, _ ->
         scenario.onActivity { vm.changeSource(OnlineSource.FikFap); if (!vm.followsOn(OnlineSource.FikFap, "sunset")) vm.toggleSiteFollow(OnlineSource.FikFap, "sunset") }

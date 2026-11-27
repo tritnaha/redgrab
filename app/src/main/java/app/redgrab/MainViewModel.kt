@@ -292,7 +292,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     var chanBoards by mutableStateOf<List<FourChanApi.Board>>(emptyList())
         internal set
 
+    /** Clips are kept inside the app (see PrivateDocs), not in a folder other apps can see. */
+    var privateStorage by mutableStateOf(PrivateDocs.isPrivate(prefs.folderUri))
+        internal set
+    /** Progress of moving clips into the app or exporting them; null when neither is running. */
+    var storageStatus by mutableStateOf<String?>(null)
+        internal set
+
     init {
+        // No save folder chosen (a new install): clips are kept inside the app from the start.
+        if (prefs.folderUri == null) { prefs.folderUri = PrivateDocs.TREE; prefs.folderLabel = "Inside the app"; privateStorage = true; hasFolder = true; folderLabel = prefs.folderLabel }
         refreshFolderInfo()
         // When a download run ends, no Save button is left showing progress.
         viewModelScope.launch {
