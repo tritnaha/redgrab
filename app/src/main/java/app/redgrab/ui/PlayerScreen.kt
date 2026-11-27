@@ -84,6 +84,7 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -178,6 +179,7 @@ fun PlayerScreen(vm: MainViewModel, session: PlayerSession) {
     /** Heights of the bar above and the panel below, so the clip sits between them and leaves background to tap. */
     var topBar by remember { mutableStateOf(0) }
     var bottomPanel by remember { mutableStateOf(0) }
+    var panelRoom by remember { mutableStateOf(0) }
 
     val ua = remember { vm.library.prefs.userAgent ?: runCatching { WebSettings.getDefaultUserAgent(ctx) }.getOrDefault("Mozilla/5.0") }
     // Saved files: read straight from the phone. Unsaved clips: stream through a local cache.
@@ -372,12 +374,22 @@ fun PlayerScreen(vm: MainViewModel, session: PlayerSession) {
             // panel lies over its lower part, as a see-through band. The sides stay free to tap.
             val sideways = boxSize.width > boxSize.height
             val top = if (sideways) 8.dp else if (fullscreen || topBar == 0) 56.dp else with(d) { topBar.toDp() } + gap
-            val bottom = if (sideways) 8.dp else if (fullscreen || bottomPanel == 0) 56.dp else minOf(with(d) { bottomPanel.toDp() }, room) + gap
+            // The panel's height differs a little from clip to clip (tags, notes); the card keeps the room for the
+            // tallest one seen, so it stays the same size as you go through clips.
+            if (bottomPanel > panelRoom) panelRoom = bottomPanel
+            val bottom = if (sideways) 8.dp else if (fullscreen || panelRoom == 0) 56.dp else minOf(with(d) { panelRoom.toDp() }, room) + gap
             (if (fullscreen || sideways) Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing) else Modifier.fillMaxSize())
                 .padding(start = side, end = side, top = top, bottom = bottom)
         })
             .onGloballyPositioned { frame = it.boundsInParent() }
+            // The same card for every clip, whatever its shape: the clip is fitted into it and the rest of the
+            // card is filled with a dimmed, blurred copy of its picture. So the place to tap never moves.
+            .then(if (cover) Modifier else Modifier.clip(RoundedCornerShape(14.dp)).background(Color(0xFF0B0B0E)))
       ) {
+        if (!cover) {
+            AsyncImage(thumbModel(s, vm.library, clip), null, contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize().blur(24.dp), alpha = 0.35f)
+        }
         AndroidView(
             modifier = Modifier.fillMaxSize(),
             factory = { c ->
@@ -414,14 +426,9 @@ fun PlayerScreen(vm: MainViewModel, session: PlayerSession) {
                         val w = size.width.toFloat()
                         val a = aspectNow
                         val f = frameNow
-                        // The part of the screen the clip itself takes up: all of it when it fills the screen,
-                        // otherwise its own shape fitted into the frame (the whole frame while its shape isn't known).
-                        val onClip = coverNow || f.isEmpty || (if (a <= 0f) f.contains(o) else {
-                            val wide = f.width / f.height > a
-                            val mw = if (wide) f.height * a else f.width
-                            val mh = if (wide) f.height else f.width / a
-                            kotlin.math.abs(o.x - f.center.x) <= mw / 2 && kotlin.math.abs(o.y - f.center.y) <= mh / 2
-                        })
+                        // The card is the clip's place whatever the clip's own shape: a tap on it is for the clip,
+                        // a tap beside it closes.
+                        val onClip = coverNow || f.isEmpty || f.contains(o)
                         when {
                             !onClip -> vm.closePlayer()
                             o.x < w * 0.25f -> prev()
@@ -703,27 +710,52 @@ private fun SaveButton(progress: Float?, done: Boolean, onClick: () -> Unit) {
     }
 }
 
-/** Asked when an online clip is saved: which of your categories it goes into. One tap saves. */
+/**
+ * Asked when an online clip is saved: where it goes. A category is yours and lives on the phone.
+ * A RedGifs clip can also go into one of your RedGifs collections, which changes your account
+ * there just as the site's own "add to collection" does. One tap on a chip saves.
+ */
 @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 private fun CategoryDialog(vm: MainViewModel, request: MainViewModel.SaveRequest) {
+    val s by vm.state.collectAsStateWithLifecycle()
     val categories = remember { vm.categories() }
+    val canCollect = vm.canCollect(request.clip)
     var new by remember { mutableStateOf("") }
-    fun save(category: String) = vm.saveOnline(request.clip, request.quality, category)
+    var alsoOnRedGifs by remember { mutableStateOf(canCollect) }
+    fun save(category: String, collection: app.redgrab.RgCollection? = null, newCollection: String? = null) =
+        vm.saveOnline(request.clip, request.quality, category, collection, newCollection)
     androidx.compose.material3.AlertDialog(
         onDismissRequest = vm::cancelSave,
         title = { Text("Save to") },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
+                Text("Category · on this phone", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
                 androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
                     androidx.compose.material3.AssistChip(onClick = { save("") }, label = { Text("No category") })
                     categories.take(24).forEach { c -> androidx.compose.material3.AssistChip(onClick = { save(c) }, label = { Text(c, maxLines = 1) }) }
                 }
-                androidx.compose.material3.OutlinedTextField(new, { new = it.take(40) }, singleLine = true, label = { Text("New category") },
-                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp))
+                if (canCollect && s.collections.isNotEmpty()) {
+                    Text("Collection · on RedGifs", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.padding(top = 10.dp))
+                    androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                        s.collections.take(40).forEach { c ->
+                            androidx.compose.material3.AssistChip(onClick = { save("", collection = c) }, label = { Text(c.name, maxLines = 1) })
+                        }
+                    }
+                }
+                androidx.compose.material3.OutlinedTextField(new, { new = it.take(40) }, singleLine = true, label = { Text("New") },
+                    modifier = Modifier.fillMaxWidth().padding(top = 10.dp))
+                if (canCollect) Row(Modifier.fillMaxWidth().clickable { alsoOnRedGifs = !alsoOnRedGifs }, verticalAlignment = Alignment.CenterVertically) {
+                    androidx.compose.material3.Checkbox(alsoOnRedGifs, { alsoOnRedGifs = it })
+                    Text("Also a collection on RedGifs", style = MaterialTheme.typography.bodySmall)
+                }
             }
         },
-        confirmButton = { androidx.compose.material3.TextButton(enabled = new.isNotBlank(), onClick = { save(new) }) { Text("Save") } },
+        confirmButton = {
+            androidx.compose.material3.TextButton(enabled = new.isNotBlank(),
+                onClick = { save(new, newCollection = new.takeIf { canCollect && alsoOnRedGifs }) }) { Text("Save") }
+        },
         dismissButton = { androidx.compose.material3.TextButton(onClick = vm::cancelSave) { Text("Cancel") } },
     )
 }

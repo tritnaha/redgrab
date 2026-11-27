@@ -243,6 +243,11 @@ class Prefs(context: Context) : RedditStore {
         get() = sp.getInt("lastSeenBuild", 0)
         set(v) = sp.edit { putInt("lastSeenBuild", v) }
 
+    /** Which kinds of content the Online tab shows (see ContentPrefs); all of them unless you choose. */
+    var contentPrefs: Set<String>
+        get() = sp.getString("contentPrefs", null)?.split(',')?.filterTo(LinkedHashSet()) { it in ContentPrefs.ALL } ?: ContentPrefs.ALL.toSet()
+        set(v) = sp.edit { putString("contentPrefs", v.filter { it in ContentPrefs.ALL }.joinToString(",")) }
+
     // ---- app lock ----
 
     /** Ask for the phone's own unlock (fingerprint, face, PIN, pattern, password) before showing the app. */

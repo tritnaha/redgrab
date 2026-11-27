@@ -6,10 +6,25 @@ time it opens after an update, and the whole list under Settings → About → W
 Each version has the sections it needs out of Added, Changed and Fixed, one line per change,
 and a link to the code that made it.
 
+## 13.8 (build 21) · 2026-11-27
+
+### Added
+- "My niches": the Online tab opens on one feed mixed from the niches you follow.
+- Browse niches: every RedGifs niche, by group or by name, with Follow and Unfollow.
+- The RedGifs search box suggests matching tags and niches as you type.
+- "Show" (the sliders icon on the Online tab) chooses which kinds of content RedGifs feeds show.
+- Saving a RedGifs clip can add it to one of your RedGifs collections, or to a new one.
+
+### Changed
+- Every clip opens in the same-sized card, so the place to tap doesn't move from clip to clip.
+- The "Online saves" filter is now "From Online": it says where a clip was found. Saved ones are under "On phone" as before.
+
 ## 13.7 (build 20) · 2026-11-26
 
 ### Fixed
 - The app closed every time it was opened after updating to 13.6. Nothing was lost; this version starts normally.
+
+[Details](https://github.com/tritnaha/redgrab/commit/dfedd8d)
 
 ## 13.6 (build 19) · 2026-11-26
 

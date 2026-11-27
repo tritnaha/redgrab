@@ -40,7 +40,37 @@ data class Performer(val username: String, val name: String, val verified: Boole
 }
 
 /** A RedGifs niche (community), e.g. from the list of niches you follow. */
-data class NicheInfo(val id: String, val name: String, val thumb: String?, val clips: Long, val subscribers: Long)
+data class NicheInfo(val id: String, val name: String, val thumb: String?, val clips: Long, val subscribers: Long,
+                     val tags: List<String> = emptyList(),
+                     /** Audiences the niche is for ("straight", "gay", ...), as RedGifs labels it; empty = not labelled. */
+                     val preferences: List<String> = emptyList())
+
+/** One page of the niche list. */
+data class NichePage(val niches: List<NicheInfo>, val page: Int, val pages: Int, val total: Int)
+
+/** How the niche list can be ordered (the names RedGifs accepts). */
+enum class NicheOrder(val api: String, val label: String) {
+    Subscribers("subscribers", "Most followed"), Posts("posts", "Most clips"), Name("alphabetical_asc", "A–Z"), Match("best_match", "Best match"),
+}
+
+/** A search suggestion: a tag and how many clips carry it. */
+data class TagSuggestion(val text: String, val clips: Long)
+
+/**
+ * What kinds of content to show. RedGifs labels clips and niches with an audience
+ * ("sexuality"); these are its six labels. A clip is hidden when it carries a label that is
+ * switched off. Clips without any label can't be judged and are shown.
+ */
+object ContentPrefs {
+    val ALL = listOf("straight", "lesbian", "gay", "trans", "bisexual", "animated")
+    fun label(v: String) = v.replaceFirstChar { it.uppercase() }
+
+    /** True when [labels] (of a clip or niche) pass with [allowed] switched on. */
+    fun allows(allowed: Set<String>, labels: List<String>): Boolean {
+        val known = labels.map { it.lowercase() }.filter { it in ALL }
+        return known.isEmpty() || known.all { it in allowed }
+    }
+}
 
 /**
  * One page of an online feed. Feeds without page numbers (Reddit, FikFap) continue from
@@ -75,7 +105,9 @@ class FeedExtras {
  *  - GET  v2/niches/{id}                               → {niche:{id, name, …}}
  *  - POST v2/auth/rate-limit {subject, captcha}        ← answer to a 429 {error:{subject}} check
  */
-class RedGifsApi(private val token: String, private val userAgent: String) {
+class RedGifsApi(private val token: String, private val userAgent: String,
+                 /** Only tests pass their own client (one that answers from canned replies). */
+                 client: OkHttpClient? = null) {
 
     companion object {
         /** One shared client: connection reuse for API, thumbnails and downloads. */
@@ -128,17 +160,22 @@ class RedGifsApi(private val token: String, private val userAgent: String) {
         const val TURNSTILE_SITE_KEY = "0x4AAAAAAAVj1T69HYyETNAA"
     }
 
-    val http: OkHttpClient = clientFor(userAgent)
+    val http: OkHttpClient = client ?: clientFor(userAgent)
 
     private suspend fun get(path: String): JSONObject = JSONObject(getText(path))
 
-    private suspend fun getText(path: String): String {
+    /** A request that changes something on your RedGifs account (follow a niche, add to a collection...). Returns the answer's text. */
+    private suspend fun send(method: String, path: String, body: JSONObject? = null): String =
+        getText(path, method, (body?.toString() ?: "").toRequestBody("application/json".toMediaType()).takeIf { body != null || method != "DELETE" })
+
+    private suspend fun getText(path: String, method: String = "GET", body: okhttp3.RequestBody? = null): String {
         var attempt = 0
         while (true) {
             val req = Request.Builder()
                 .url("https://api.redgifs.com/$path")
                 .header("Authorization", "Bearer $token")
                 .header("Accept", "application/json")
+                .method(method, if (method == "GET") null else body)
                 .build()
             http.newCall(req).execute().use { r ->
                 val body = r.body?.string().orEmpty()
@@ -237,16 +274,72 @@ class RedGifsApi(private val token: String, private val userAgent: String) {
 
     // ---- online browsing ---------------------------------------------------------------
 
-    /** Niches you follow on RedGifs. */
-    suspend fun followedNiches(): List<NicheInfo> {
-        val j = get("v2/niches/following")
+    private fun niches(j: JSONObject): List<NicheInfo> {
         val arr = j.optJSONArray("niches") ?: j.optJSONArray("items") ?: JSONArray()
         return (0 until arr.length()).mapNotNull { i ->
             val n = arr.optJSONObject(i) ?: return@mapNotNull null
             val id = n.optString("id").ifEmpty { return@mapNotNull null }
             NicheInfo(id, n.optString("name").ifEmpty { id }, n.optString("thumbnail").takeIf { it.startsWith("http") },
-                n.optLong("gifs"), n.optLong("subscribers"))
+                n.optLong("gifs"), n.optLong("subscribers"),
+                n.optJSONArray("tags")?.strings() ?: emptyList(), n.optJSONArray("preferences")?.strings() ?: emptyList())
         }
+    }
+
+    /** Niches you follow on RedGifs. */
+    suspend fun followedNiches(): List<NicheInfo> = niches(get("v2/niches/following"))
+
+    /** The groups RedGifs sorts its niches into ("Amateur", "Fetish", ...). */
+    suspend fun nicheCategories(): List<String> = get("v2/niches/categories").optJSONArray("categories")?.strings() ?: emptyList()
+
+    /**
+     * The niche list: all of them, or those matching [query] and/or in [category]. Checked against
+     * the site (2026-11): it accepts the orders in [NicheOrder] and answers "bad sorting order" to others.
+     */
+    suspend fun searchNiches(query: String, category: String?, order: NicheOrder, page: Int, count: Int = 30): NichePage {
+        val q = (if (query.isBlank()) "" else "&query=${enc(query.trim())}") + (if (category.isNullOrBlank()) "" else "&category=${enc(category)}")
+        // "Best match" only means something with words to match.
+        val o = if (order == NicheOrder.Match && query.isBlank()) NicheOrder.Subscribers else order
+        val j = get("v2/niches/search?order=${o.api}&page=$page&count=$count$q")
+        return NichePage(niches(j), j.optInt("page", page), j.optInt("pages", 0), j.optInt("total", 0))
+    }
+
+    /** Follow or stop following a niche on your RedGifs account. */
+    suspend fun followNiche(id: String, follow: Boolean) { send(if (follow) "POST" else "DELETE", "v2/niches/${enc(id)}/subscription") }
+
+    /** Tags matching what has been typed so far, most used first. */
+    suspend fun suggestTags(query: String): List<TagSuggestion> {
+        if (query.isBlank()) return emptyList()
+        val arr = JSONArray(getText("v2/search/suggest?query=${enc(query.trim())}"))
+        return (0 until arr.length()).mapNotNull { i ->
+            val o = arr.optJSONObject(i) ?: return@mapNotNull null
+            if (o.optString("type", "tag") != "tag") return@mapNotNull null
+            o.optString("text").takeIf { it.isNotBlank() }?.let { TagSuggestion(it, o.optLong("gifs")) }
+        }.sortedByDescending { it.clips }
+    }
+
+    // ---- changes to your RedGifs account, as the site's own pages make them ---------------
+
+    /** Adds a clip to one of your collections. */
+    suspend fun addToCollection(collectionId: String, clipId: String) {
+        send("POST", "v2/me/collections/${enc(collectionId)}/gifs", JSONObject().put("gifId", clipId))
+    }
+
+    /** Creates a private collection and returns it (its ID is read from the answer, else looked up by name). */
+    suspend fun createCollection(name: String): RgCollection {
+        val text = send("POST", "v2/me/collections", JSONObject().put("folderName", name.trim()).put("description", JSONObject.NULL).put("published", false))
+        val j = runCatching { JSONObject(text) }.getOrNull()
+        val c = j?.optJSONObject("collection") ?: j
+        val id = c?.optString("folderId").orEmpty().ifEmpty { c?.optString("id").orEmpty() }
+        if (id.isNotEmpty()) return RgCollection(id, c?.optString("folderName").orEmpty().ifEmpty { name.trim() })
+        return myCollections().firstOrNull { it.name.equals(name.trim(), ignoreCase = true) } ?: throw IOException("RedGifs didn't return the new collection")
+    }
+
+    /** The content preferences stored on your RedGifs account, or null when it has none. */
+    suspend fun accountPrefs(): List<String>? = get("v1/me").optJSONArray("preferences")?.strings()
+
+    /** Stores the content preferences on your RedGifs account, which its own feeds follow. */
+    suspend fun setAccountPrefs(allowed: List<String>) {
+        send("PATCH", "v1/me", JSONObject().put("operations", JSONArray().put(JSONObject().put("path", "/preferences").put("value", JSONArray(allowed)))))
     }
 
     private suspend fun onlinePage(path: String, page: Int, extras: FeedExtras): OnlinePage {
@@ -262,9 +355,9 @@ class RedGifsApi(private val token: String, private val userAgent: String) {
      * (2026-11), it accepts hot, latest, best and oldest, and answers HTTP 400 "BadOrder" to
      * the trending / top7 / top28 that search uses. So: Trending → hot, Newest → latest, any Top → best.
      */
-    suspend fun nicheClips(nicheId: String, order: OnlineOrder, page: Int, extras: FeedExtras): OnlinePage {
+    suspend fun nicheClips(nicheId: String, order: OnlineOrder, page: Int, extras: FeedExtras, count: Int = 40): OnlinePage {
         val o = when (order) { OnlineOrder.Trending -> "hot"; OnlineOrder.New -> "latest"; else -> "best" }
-        return onlinePage("v2/niches/${enc(nicheId)}/gifs?count=40&page=$page&order=$o&type=g", page, extras)
+        return onlinePage("v2/niches/${enc(nicheId)}/gifs?count=${count.coerceIn(10, 100)}&page=$page&order=$o&type=g", page, extras)
     }
 
     /**

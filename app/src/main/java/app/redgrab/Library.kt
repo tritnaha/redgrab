@@ -1260,6 +1260,28 @@ class Library(private val ctx: Context) {
         store.putClips(extras.filter { it.id !in inLibrary }.mapIndexed { i, c -> ClipRow.of(c, ClipRow.EXTRA, i) })
     }
 
+    /** A collection created from the app: listed straight away, without waiting for a sync. */
+    fun addCollection(c: RgCollection) = synchronized(lock) {
+        val list = _state.value.collections
+        if (list.any { it.id == c.id }) return@synchronized
+        saveCollections(list + c)
+        _state.update { it.copy(collections = list + c) }
+    }
+
+    /**
+     * Notes that a clip was added to one of your RedGifs collections, so it shows there before the
+     * next sync confirms it.
+     */
+    fun noteInCollection(clipId: String, col: RgCollection) = synchronized(lock) {
+        fun mark(c: Clip) = if (c.id == clipId && col.id !in c.colIds) c.copy(sources = c.sources + col.name, colIds = c.colIds + col.id) else c
+        raw = raw.map(::mark)
+        if (extras.any { it.id == clipId }) { extras = extras.map(::mark); saveExtras() }
+        val cols = _state.value.collections.map { if (it.id == col.id) it.copy(count = it.count + 1) else it }
+        saveCollections(cols)
+        val clips = compose()
+        _state.update { it.copy(clips = clips, collections = cols) }
+    }
+
     private fun saveCollections(list: List<RgCollection>) = tx {
         store.clearCollections()
         store.putCollections(list.mapIndexed { i, c -> CollectionRow(c.id, i, c.name, c.count, c.thumb) })

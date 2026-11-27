@@ -605,6 +605,15 @@ class DownloadWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(c
 }
 
 object Format {
+    /** "961K", "1.2M": a large count in a few characters. */
+    fun count(n: Long): String = when {
+        n >= 10_000_000 -> "%dM".format(n / 1_000_000)
+        n >= 1_000_000 -> "%.1fM".format(n / 1e6)
+        n >= 10_000 -> "%dK".format(n / 1000)
+        n >= 1000 -> "%.1fK".format(n / 1e3)
+        else -> n.toString()
+    }
+
     fun speed(bps: Long): String = when {
         bps >= 1_000_000 -> "%.1f MB/s".format(bps / 1_000_000.0)
         bps >= 1_000 -> "%.0f KB/s".format(bps / 1_000.0)

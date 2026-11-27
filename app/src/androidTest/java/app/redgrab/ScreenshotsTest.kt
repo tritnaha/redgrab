@@ -218,6 +218,16 @@ class ScreenshotsTest {
         shot("v13-clip")
     }
 
+    /** The niche list opens (on a device without a route to RedGifs it shows its own "couldn't load" line). */
+    @Test fun niches() = withApp { scenario, vm, mine ->
+        scenario.onActivity { vm.showOnline(feed(mine)) }
+        tab("Online")
+        await("For you")
+        tab("Browse niches")
+        await("Most followed")
+        shot("v13-niches")
+    }
+
     @Test fun whatsNew() = withApp { scenario, vm, _ ->
         // What an update shows: the versions that are new to you (here, the last two).
         val recent = vm.changelog.take(2)

@@ -41,6 +41,9 @@ import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material3.AssistChip
+import app.redgrab.NicheInfo
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
@@ -130,6 +133,8 @@ fun DiscoverScreen(vm: MainViewModel, onSignIn: () -> Unit, onOpenSettings: () -
     LaunchedEffect(d.feed, d.order, d.firstPage) { grid.scrollToItem(0) }
 
     BackHandler(enabled = !home) { vm.openFeed(vm.homeFeed(source)) }
+    var showPrefs by remember { mutableStateOf(false) }
+    if (showPrefs) ContentPrefsDialog(vm) { showPrefs = false }
 
     val m = gridMetrics(vm.wall)
     val navPad = LocalNavPad.current
@@ -153,10 +158,15 @@ fun DiscoverScreen(vm: MainViewModel, onSignIn: () -> Unit, onOpenSettings: () -
                 ),
                 actions = {
                     OnlinePill()
+                    // What kinds of content RedGifs feeds show.
+                    if (source == OnlineSource.RedGifs && vm.signedIn) IconButton(onClick = { showPrefs = true }) {
+                        Icon(Icons.Default.Tune, "What to show")
+                    }
                     IconButton(onClick = { showView = true }) { Icon(Icons.Default.GridView, "View: grid or wall, preview size") }
                 },
                 navigationIcon = {
-                    if (!home) IconButton(onClick = { vm.openFeed(vm.homeFeed(source)) }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back to all") }
+                    if (vm.nicheBrowserOpen && source == OnlineSource.RedGifs) IconButton(onClick = vm::closeNicheBrowser) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
+                    else if (!home) IconButton(onClick = { vm.openFeed(vm.homeFeed(source)) }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back to all") }
                 },
                 title = {
                     // The title is the source switch: tap it to pick another site.
@@ -164,7 +174,7 @@ fun DiscoverScreen(vm: MainViewModel, onSignIn: () -> Unit, onOpenSettings: () -
                     Box {
                         Row(Modifier.clip(RoundedCornerShape(8.dp)).clickable { menu = true }, verticalAlignment = Alignment.CenterVertically) {
                             Column(Modifier.weight(1f, fill = false)) {
-                                Text(if (home) source.label else d.feed.title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold,
+                                Text(if (vm.nicheBrowserOpen && source == OnlineSource.RedGifs) "Niches" else if (home) source.label else d.feed.title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold,
                                     maxLines = 1, overflow = TextOverflow.Ellipsis)
                                 Text(listOfNotNull(if (home) "Online" else source.label, d.order.label.takeIf { d.feed.orders.isNotEmpty() }).joinToString(" · "),
                                     style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.75f),
@@ -233,9 +243,14 @@ fun DiscoverScreen(vm: MainViewModel, onSignIn: () -> Unit, onOpenSettings: () -
         val head = Modifier.padding(horizontal = m.head)
         // Shortcuts: on RedGifs "For you" and the general feed; on Reddit your saved and upvoted posts and the
         // subreddits you joined; elsewhere what you opened recently.
+        // The niche list takes the place of the feed while it is open.
+        if (source == OnlineSource.RedGifs && vm.nicheBrowserOpen) {
+            Box(Modifier.padding(pad).fillMaxSize()) { NicheBrowser(vm, navPad) }
+            return@Scaffold
+        }
         val shortcuts = remember(source, d.subs, vm.recents, vm.redditUser) {
             val mine = if (source == OnlineSource.Reddit && vm.redditUser != null) listOf(Feed.RedditSaved, Feed.RedditUpvoted) else emptyList()
-            val recent = if (source == OnlineSource.RedGifs) listOf(Feed.ForYou, Feed.Search("")) else vm.recents.map { Feed.fromQuery(source, it) }
+            val recent = if (source == OnlineSource.RedGifs) listOf(Feed.MyNiches, Feed.ForYou, Feed.Search("")) else vm.recents.map { Feed.fromQuery(source, it) }
             (mine + recent + d.subs.map { Feed.Subreddit(it) }).distinctBy { it.title.lowercase() }.filter { !it.needsQuery }
         }
         Box(Modifier.padding(pad).fillMaxSize()) {
@@ -256,14 +271,35 @@ fun DiscoverScreen(vm: MainViewModel, onSignIn: () -> Unit, onOpenSettings: () -
                     OnlineSource.EroMe -> "Search, or @user"
                     OnlineSource.FourChan -> "Search /gif/ threads"
                 }
-                BarSearchField(query, { query = it }, hint, modifier = head, leadingIcon = true,
-                    onSearch = { keyboard?.hide(); vm.openFeed(Feed.fromQuery(source, query)) })
+                BarSearchField(query, { query = it; vm.suggest(it) }, hint, modifier = head, leadingIcon = true,
+                    onSearch = { keyboard?.hide(); vm.suggest(""); vm.openFeed(Feed.fromQuery(source, query)) })
+            }
+            // While typing on RedGifs: tags and niches that match.
+            if (source == OnlineSource.RedGifs && (vm.tagSuggestions.isNotEmpty() || vm.nicheSuggestions.isNotEmpty())) {
+                item(span = StaggeredGridItemSpan.FullLine) {
+                    CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides 40.dp) {
+                        LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp), contentPadding = PaddingValues(horizontal = m.head)) {
+                            items(vm.nicheSuggestions, key = { "n" + it.id }) { n ->
+                                AssistChip(onClick = { keyboard?.hide(); vm.suggest(""); vm.openFeed(Feed.Niche(n.id, n.name)) },
+                                    label = { Text(n.name, maxLines = 1) }, leadingIcon = { Icon(Icons.Default.Public, null, Modifier.size(16.dp)) })
+                            }
+                            items(vm.tagSuggestions, key = { "t" + it.text }) { t ->
+                                AssistChip(onClick = { keyboard?.hide(); vm.suggest(""); vm.openFeed(Feed.Search(t.text)) },
+                                    label = { Text("${t.text} · ${Format.count(t.clips)}", maxLines = 1) })
+                            }
+                        }
+                    }
+                }
             }
             if (shortcuts.isNotEmpty()) {
                 item(span = StaggeredGridItemSpan.FullLine) {
                     CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides 40.dp) {
                         LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp), contentPadding = PaddingValues(horizontal = m.head)) {
                             items(shortcuts, key = { it.title }) { f -> FilterChip(d.feed == f, { vm.openFeed(f) }, { Text(f.title, maxLines = 1) }) }
+                            // Every niche on RedGifs, to look through, search and follow.
+                            if (source == OnlineSource.RedGifs) item(key = "browse-niches") {
+                                AssistChip(onClick = vm::openNicheBrowser, label = { Text("Browse niches") }, leadingIcon = { Icon(Icons.Default.Search, null, Modifier.size(16.dp)) })
+                            }
                         }
                     }
                 }
@@ -295,8 +331,19 @@ fun DiscoverScreen(vm: MainViewModel, onSignIn: () -> Unit, onOpenSettings: () -
                 }
             } else if (source == OnlineSource.RedGifs && d.nichesLoaded && home) {
                 item(span = StaggeredGridItemSpan.FullLine) {
-                    Text("Niches you follow on RedGifs show up here. Follow some on RedGifs, or search above.",
+                    Text("Follow niches to fill “My niches”.",
                         style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = head)
+                }
+            }
+            // A niche's own feed: follow it from here.
+            (d.feed as? Feed.Niche)?.let { f ->
+                item(span = StaggeredGridItemSpan.FullLine) {
+                    val known = d.niches.firstOrNull { it.id == f.id } ?: vm.nicheBrowse?.items?.firstOrNull { it.id == f.id } ?: NicheInfo(f.id, f.name, null, 0, 0)
+                    Row(head, verticalAlignment = Alignment.CenterVertically) {
+                        Text(if (known.subscribers > 0) "${Format.count(known.clips)} clips · ${Format.count(known.subscribers)} following" else "",
+                            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
+                        FollowButton(vm, known)
+                    }
                 }
             }
             if (d.feed.orders.isNotEmpty()) {

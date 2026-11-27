@@ -23,7 +23,8 @@ enum class Filter { All, New, Saved, HD, SD, Edited, Failed, Dead, Unseen }
 
 /** Where a clip comes from. */
 enum class Origin(val label: String) {
-    All("All"), Liked("Liked"), Collections("Collections"), Synced("Synced"), Imported("Imported"), Online("Online saves");
+    // "From Online": where the clip was found, not where it is. Saved ones are on the phone like any other.
+    All("All"), Liked("Liked"), Collections("Collections"), Synced("Synced"), Imported("Imported"), Online("From Online");
 
     fun matches(s: LibraryState, c: Clip): Boolean = when (this) {
         All -> true
@@ -116,6 +117,9 @@ fun visibleClips(s: LibraryState, filter: Filter, query: String, facet: Facet?, 
 fun syncIsFresh(lastSynced: Long, maxAgeHours: Int, now: Long = System.currentTimeMillis()): Boolean =
     maxAgeHours > 0 && lastSynced in 1..now && now - lastSynced < maxAgeHours * 3_600_000L
 
+/** "My niches" was asked for, but you follow none. */
+class NoNichesException : java.io.IOException("You follow no niches yet")
+
 /** What the delete screen is asking about. */
 data class DeleteRequest(val originals: List<Clip>, val copies: List<Clip>, val selectedCopies: Set<String>)
 
@@ -138,6 +142,11 @@ sealed interface Feed {
     val numbered: Boolean get() = false
 
     // RedGifs
+    /** One feed made from the niches you follow (see NicheMix). */
+    data object MyNiches : Feed {
+        override val title get() = "My niches"
+        override val source get() = OnlineSource.RedGifs
+    }
     /** What the site's home page shows you when signed in. */
     data object ForYou : Feed {
         override val title get() = "For you"
@@ -239,7 +248,7 @@ sealed interface Feed {
     companion object {
         /** What a source shows first. */
         fun home(s: OnlineSource): Feed = when (s) {
-            OnlineSource.RedGifs -> ForYou
+            OnlineSource.RedGifs -> MyNiches
             OnlineSource.Reddit -> RedditHome
             OnlineSource.FikFap -> FikFapTag("")
             OnlineSource.SexCom -> SexSearch("")
@@ -901,7 +910,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * "" = no category. Then adds the clip to the library and saves it (HD first). Pictures and
      * 4chan's files go straight into the save folder.
      */
-    fun saveOnline(clip: Clip, q: Quality? = null, category: String? = null) {
+    fun saveOnline(clip: Clip, q: Quality? = null, category: String? = null, collection: RgCollection? = null, newCollection: String? = null) {
         if (category == null && askCategory) { saveRequest = SaveRequest(clip, q); return }
         saveRequest = null
         val cat = category?.trim().orEmpty()
@@ -916,6 +925,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             }
             library.addExtra(c)
             if (cat.isNotEmpty()) library.setCategory(c.id, cat)
+            if (collection != null || !newCollection.isNullOrBlank()) addToCollection(c, collection, newCollection?.trim())
             withContext(Dispatchers.Main) { if (q == null) download(c.id) else downloadQuality(c.id, q) }
             settleSave(c.id)
         }
@@ -933,6 +943,30 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         kotlinx.coroutines.delay(4_000)
         val dl = library.download.value
         if (!dl.running && !dl.waiting) withContext(Dispatchers.Main) { saveRequested = saveRequested - id }
+    }
+
+    /** Whether a clip can go into a RedGifs collection: only RedGifs' own clips, and only when signed in. */
+    fun canCollect(clip: Clip) = signedIn && !clip.imported && !clip.isCopy && OnlineSource.of(clip.id) == OnlineSource.RedGifs
+
+    /**
+     * Adds a clip to one of your RedGifs collections, creating the collection first when [newName]
+     * is given. This changes your RedGifs account, exactly as "add to collection" on the site does.
+     */
+    private fun addToCollection(clip: Clip, existing: RgCollection?, newName: String?) {
+        if (!canCollect(clip)) return
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching {
+                val col = existing
+                    ?: state.value.collections.firstOrNull { it.name.equals(newName, ignoreCase = true) }
+                    ?: withRedGifs(getApplication()) { it.createCollection(newName!!) }.also { library.addCollection(it); AppLog.i("Created the RedGifs collection ${it.name}") }
+                withRedGifs(getApplication()) { it.addToCollection(col.id, clip.id) }
+                library.noteInCollection(clip.id, col)
+                col
+            }.onSuccess { say("Added to ${it.name} on RedGifs") }.onFailure { e ->
+                AppLog.w("Could not add ${clip.id} to a RedGifs collection: ${e.message}")
+                say("Not added to the RedGifs collection: ${friendly(e, OnlineSource.RedGifs).removePrefix("Sync failed: ")}")
+            }
+        }
     }
 
     private fun saveOnlineFile(clip: Clip, category: String) {
@@ -999,6 +1033,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     // ---- Discover (online browsing) ---------------------------------------------------
 
+    private var emptyPages = 0
+
     /** [startPage]: open a numbered feed at that page instead of the first. */
     fun openFeed(feed: Feed, order: OnlineOrder = discover.order, startPage: Int = 1) {
         val first = if (feed.numbered) startPage.coerceAtLeast(1) else 1
@@ -1022,9 +1058,145 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** RedGifs refused "For you" or had nothing in it: the general feed is the home for the rest of this run. */
     private var forYouUnavailable by mutableStateOf(false)
+    /** You follow no niches (yet), so there is nothing to mix: "For you" is the home until you follow one. */
+    private var noNiches by mutableStateOf(false)
 
-    /** What a source shows first. */
-    fun homeFeed(s: OnlineSource): Feed = if (s == OnlineSource.RedGifs && forYouUnavailable) Feed.Search("") else Feed.home(s)
+    /** What a source shows first. On RedGifs: your niches mixed; without any, "For you"; without that, everything. */
+    fun homeFeed(s: OnlineSource): Feed = when {
+        s != OnlineSource.RedGifs -> Feed.home(s)
+        !noNiches -> Feed.MyNiches
+        !forYouUnavailable -> Feed.ForYou
+        else -> Feed.Search("")
+    }
+
+    // ---- what to show: content preferences ------------------------------------------------
+
+    var contentPrefs by mutableStateOf(prefs.contentPrefs)
+        private set
+
+    /**
+     * Sets which kinds of content the Online tab shows. Applied here to every RedGifs feed, and
+     * stored on your RedGifs account as the site's own "preferences" dialog does, so its feeds
+     * ("For you" above all) follow it too.
+     */
+    fun changeContentPrefs(allowed: Set<String>) {
+        if (allowed == contentPrefs) return
+        prefs.contentPrefs = allowed
+        contentPrefs = prefs.contentPrefs
+        AppLog.i("Content preferences: ${contentPrefs.joinToString().ifEmpty { "none" }}")
+        if (discover.feed.source == OnlineSource.RedGifs) openFeed(discover.feed)
+        if (!prefs.signedIn) return
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching { withRedGifs(getApplication()) { it.setAccountPrefs(ContentPrefs.ALL.filter { p -> p in allowed }) } }
+                .onFailure { AppLog.w("Preferences not stored on RedGifs (they still apply in the app): ${it.message}") }
+        }
+    }
+
+    // ---- niches: browse, search, follow -----------------------------------------------------
+
+    /** The niche list on screen; null = not open. */
+    data class NicheBrowse(val query: String = "", val category: String? = null, val order: NicheOrder = NicheOrder.Subscribers,
+                           val items: List<NicheInfo> = emptyList(), val page: Int = 0, val pages: Int = 1, val total: Int = 0,
+                           val loading: Boolean = false, val error: String? = null, val categories: List<String> = emptyList())
+    var nicheBrowse by mutableStateOf<NicheBrowse?>(null)
+        private set
+    /** The niche list is showing. (What it held stays when it is closed, so you come back to the same place.) */
+    var nicheBrowserOpen by mutableStateOf(false)
+        private set
+    private var nicheJob: kotlinx.coroutines.Job? = null
+    /** Niches whose follow or unfollow is on its way to RedGifs. */
+    var followBusy by mutableStateOf<Set<String>>(emptySet())
+        private set
+
+    fun openNicheBrowser() {
+        if (sfw) return say("SFW mode is on.")
+        val old = nicheBrowse ?: NicheBrowse()
+        nicheBrowse = old
+        nicheBrowserOpen = true
+        if (old.categories.isEmpty()) viewModelScope.launch {
+            val cats = withContext(Dispatchers.IO) { runCatching { withRedGifs(getApplication()) { it.nicheCategories() } }.getOrDefault(emptyList()) }
+            nicheBrowse = nicheBrowse?.copy(categories = cats)
+        }
+        if (old.items.isEmpty()) loadNiches(reset = true)
+    }
+    fun closeNicheBrowser() { nicheBrowserOpen = false }
+
+    /** Shows the niche list for these words, group and order, from its first page. */
+    fun searchNiches(query: String = nicheBrowse?.query.orEmpty(), category: String? = nicheBrowse?.category, order: NicheOrder = nicheBrowse?.order ?: NicheOrder.Subscribers) {
+        val b = nicheBrowse ?: return
+        nicheBrowse = b.copy(query = query, category = category, order = order)
+        loadNiches(reset = true)
+    }
+
+    fun loadNiches(reset: Boolean = false) {
+        val b = nicheBrowse ?: return
+        if (!reset && (b.loading || b.page >= b.pages)) return
+        nicheJob?.cancel()
+        val next = if (reset) 1 else b.page + 1
+        nicheBrowse = b.copy(loading = true, error = null, items = if (reset) emptyList() else b.items, page = if (reset) 0 else b.page)
+        nicheJob = viewModelScope.launch {
+            val r = withContext(Dispatchers.IO) { runCatching { withRedGifs(getApplication()) { it.searchNiches(b.query, b.category, b.order, next) } } }
+            val now = nicheBrowse ?: return@launch
+            r.onSuccess { pg ->
+                // Niches for an audience you switched off are left out; unlabelled ones stay.
+                val shown = pg.niches.filter { ContentPrefs.allows(contentPrefs, it.preferences) }
+                val seen = now.items.mapTo(HashSet()) { it.id }
+                nicheBrowse = now.copy(items = now.items + shown.filter { it.id !in seen }, page = next, pages = pg.pages.coerceAtLeast(next), total = pg.total, loading = false)
+                withContext(Dispatchers.IO) { library.learnNiches(pg.niches.associate { it.id to it.name }) }
+            }.onFailure { e ->
+                if (e is kotlinx.coroutines.CancellationException) return@onFailure
+                AppLog.w("Niche list failed: ${e.message}")
+                nicheBrowse = now.copy(loading = false, error = friendly(e, OnlineSource.RedGifs).replace("Sync failed", "Couldn't load"))
+            }
+        }
+    }
+
+    fun follows(nicheId: String) = discover.niches.any { it.id == nicheId }
+
+    /** Follows or stops following a niche on your RedGifs account. */
+    fun toggleFollow(n: NicheInfo) {
+        if (n.id in followBusy) return
+        val follow = !follows(n.id)
+        followBusy = followBusy + n.id
+        viewModelScope.launch {
+            val r = withContext(Dispatchers.IO) { runCatching { withRedGifs(getApplication()) { it.followNiche(n.id, follow) } } }
+            followBusy = followBusy - n.id
+            r.onSuccess {
+                discover = discover.copy(niches = if (follow) discover.niches + n else discover.niches.filter { it.id != n.id }, nichesLoaded = true)
+                if (follow) noNiches = false
+                AppLog.i((if (follow) "Following" else "Stopped following") + " the niche ${n.name}")
+                // The mix is made from what you follow: redo it when that changes.
+                if (discover.feed == Feed.MyNiches) openFeed(Feed.MyNiches)
+            }.onFailure { e ->
+                AppLog.w("Could not ${if (follow) "follow" else "unfollow"} ${n.id}: ${e.message}")
+                say("Couldn't ${if (follow) "follow" else "unfollow"} ${n.name}: ${friendly(e, OnlineSource.RedGifs).removePrefix("Sync failed: ")}")
+            }
+        }
+    }
+
+    // ---- suggestions while typing in the RedGifs search box -----------------------------------
+
+    var tagSuggestions by mutableStateOf<List<TagSuggestion>>(emptyList())
+        private set
+    var nicheSuggestions by mutableStateOf<List<NicheInfo>>(emptyList())
+        private set
+    private var suggestJob: kotlinx.coroutines.Job? = null
+
+    /** Looks up tags and niches matching what has been typed (after a short pause in typing). */
+    fun suggest(text: String) {
+        suggestJob?.cancel()
+        val q = text.trim()
+        if (q.length < 2 || sfw || !prefs.signedIn || discover.feed.source != OnlineSource.RedGifs) { tagSuggestions = emptyList(); nicheSuggestions = emptyList(); return }
+        suggestJob = viewModelScope.launch {
+            kotlinx.coroutines.delay(350)
+            val (tags, niches) = withContext(Dispatchers.IO) {
+                val t = runCatching { withRedGifs(getApplication()) { it.suggestTags(q) } }.getOrDefault(emptyList())
+                val n = runCatching { withRedGifs(getApplication()) { it.searchNiches(q, null, NicheOrder.Match, 1, count = 10).niches } }.getOrDefault(emptyList())
+                t.take(10) to n.filter { ContentPrefs.allows(contentPrefs, it.preferences) }.take(6)
+            }
+            tagSuggestions = tags; nicheSuggestions = niches
+        }
+    }
 
     // ---- Reddit account ----------------------------------------------------------------
 
@@ -1111,8 +1283,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         discoverJob = viewModelScope.launch {
             val next = d.page + 1
             val result = withContext(Dispatchers.IO) { runCatching { fetchPage(d, next) } }
-            // "For you" with nothing in it (or refused by the site): show the general feed instead.
             val failure = result.exceptionOrNull()
+            // "My niches" with no niche followed: "For you" takes its place until you follow one.
+            if (d.feed == Feed.MyNiches && failure is NoNichesException) {
+                noNiches = true
+                discover = discover.copy(loading = false)
+                openFeed(homeFeed(OnlineSource.RedGifs))
+                return@launch
+            }
+            // "For you" with nothing in it (or refused by the site): show the general feed instead.
             if (d.feed == Feed.ForYou && next == d.firstPage && d.items.isEmpty() &&
                 // A refusal counts too: if the sign-in really has lapsed, the general feed will say so.
                 (result.getOrNull()?.clips?.isEmpty() == true || failure is HttpException || failure is AuthException)) {
@@ -1124,13 +1303,17 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             }
             result.onSuccess { pg ->
                 val seen = discover.items.mapTo(HashSet()) { it.id }
-                val fresh = pg.clips.filter { it.id !in seen }
+                // Content preferences: RedGifs clips labelled for an audience you switched off are left out.
+                val wanted = if (source == OnlineSource.RedGifs) pg.clips.filter { ContentPrefs.allows(contentPrefs, it.sexuality) } else pg.clips
+                val fresh = wanted.filter { it.id !in seen }
                 discover = discover.copy(items = discover.items + fresh, page = next, cursor = pg.cursor,
                     // A page that added nothing isn't a place you can be.
                     pageStarts = if (fresh.isEmpty()) discover.pageStarts else discover.pageStarts + discover.items.size,
                     pages = if (pg.pages > 0) pg.pages else discover.pages,
                     // A page can come back empty (no playable posts) and still have more behind it.
                     hasMore = pg.hasMore && (pg.clips.isNotEmpty() || pg.cursor != null), loading = false)
+                // A page with nothing left after filtering: go on to the next one (a few times at most).
+                if (fresh.isEmpty() && pg.clips.isNotEmpty() && discover.hasMore && emptyPages++ < 6) loadMoreDiscover() else if (fresh.isNotEmpty()) emptyPages = 0
                 if (source != OnlineSource.RedGifs && next == 1 && pg.clips.isNotEmpty() && d.feed.query.isNotBlank()) {
                     prefs.addRecent(source.name, d.feed.query)
                     recents = prefs.recent(source.name)
@@ -1156,6 +1339,22 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
         val http by lazy { RedGifsApi.clientFor(getApplication<Application>().userAgent) }
         return when (val f = d.feed) {
+            is Feed.MyNiches -> {
+                var followed = d.niches
+                if (followed.isEmpty() && !d.nichesLoaded) {
+                    followed = withRedGifs(getApplication()) { it.followedNiches() }
+                    withContext(Dispatchers.Main) { discover = discover.copy(niches = followed, nichesLoaded = true) }
+                }
+                if (followed.isEmpty()) throw NoNichesException()
+                redgifs { api, x ->
+                    // A few clips from each niche in turn. One niche failing doesn't spoil the page; a lapsed sign-in still does.
+                    val parts = NicheMix.plan(next, followed.map { it.id }).map { (id, p) ->
+                        try { api.nicheClips(id, OnlineOrder.Trending, p, x, count = NicheMix.PER_NICHE) }
+                        catch (e: HttpException) { AppLog.w("My niches: $id page $p: ${e.message}"); null }
+                    }
+                    OnlinePage(NicheMix.interleave(parts.map { it?.clips ?: emptyList() }), next, 0, more = parts.any { it != null && it.hasMore })
+                }
+            }
             is Feed.ForYou -> redgifs { api, x -> api.forYou(next, x) }
             is Feed.Search -> redgifs { api, x -> api.searchClips(f.query, d.order, next, x) }
             is Feed.Niche -> redgifs { api, x -> api.nicheClips(f.id, d.order, next, x) }

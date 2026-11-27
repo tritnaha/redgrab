@@ -543,8 +543,10 @@ class SourcesTest {
         }
     }
 
-    @Test fun redGifsOpensOnForYou() {
-        assertEquals(Feed.ForYou, Feed.home(OnlineSource.RedGifs))
+    @Test fun redGifsOpensOnYourNichesWithForYouBehindIt() {
+        // The home is the mix of followed niches; "For you" is what takes over when you follow none.
+        assertEquals(Feed.MyNiches, Feed.home(OnlineSource.RedGifs))
+        assertTrue(Feed.MyNiches.orders.isEmpty() && !Feed.MyNiches.numbered && !Feed.MyNiches.needsQuery)
         assertEquals(OnlineSource.RedGifs, Feed.ForYou.source)
         // One order only, pages numbered, nothing to type first.
         assertTrue(Feed.ForYou.orders.isEmpty() && Feed.ForYou.numbered && !Feed.ForYou.needsQuery)

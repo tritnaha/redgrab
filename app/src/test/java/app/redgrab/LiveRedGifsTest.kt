@@ -93,6 +93,39 @@ class LiveRedGifsTest {
             say("niche name lookup: ${if (api.nicheName(niche) != null) "ok" else "none"}")
         }
 
+        // Niches: the groups, the whole list in every order, a search, and the mixed feed's small pages.
+        val cats = api.nicheCategories()
+        say("niche groups: ${cats.size} (${cats.take(4).joinToString()}…)")
+        assertTrue(cats.size >= 5)
+        for (o in NicheOrder.entries) {
+            val pg = api.searchNiches("", null, o, 1, count = 10)
+            say("niche list, ${o.label}: ${pg.niches.size} of ${pg.total}, ${pg.pages} pages; labelled for an audience: ${pg.niches.count { it.preferences.isNotEmpty() }}")
+            assertTrue(pg.niches.isNotEmpty() && pg.pages > 1 && pg.niches.all { it.id.isNotEmpty() && it.name.isNotEmpty() })
+        }
+        val inGroup = api.searchNiches("", cats.first(), NicheOrder.Subscribers, 1, count = 10)
+        say("niche list, group \"${cats.first()}\": ${inGroup.total}")
+        assertTrue(inGroup.niches.isNotEmpty() && inGroup.total < api.searchNiches("", null, NicheOrder.Subscribers, 1, count = 10).total)
+        val found = api.searchNiches("dance", null, NicheOrder.Match, 1, count = 10)
+        say("niche search \"dance\": ${found.total}")
+        assertTrue(found.niches.isNotEmpty())
+        val tags = api.suggestTags("dan")
+        say("tag suggestions for \"dan\": ${tags.size}, most used has ${tags.firstOrNull()?.clips} clips")
+        assertTrue(tags.isNotEmpty() && tags.first().clips >= tags.last().clips)
+        // The mix: a few clips from each of several niches, as "My niches" asks for them.
+        val some = api.searchNiches("", null, NicheOrder.Subscribers, 1, count = 10).niches.take(3).map { it.id }
+        val parts = NicheMix.plan(1, some).map { (id, p) -> api.nicheClips(id, OnlineOrder.Trending, p, extras, count = NicheMix.PER_NICHE) }
+        val mixed = NicheMix.interleave(parts.map { it.clips })
+        say("mix of ${some.size} niches: ${parts.map { it.clips.size }} clips each, ${mixed.size} in all, ${mixed.map { it.id }.toSet().size} different; " +
+            "labelled: ${mixed.count { it.sexuality.isNotEmpty() }}")
+        assertTrue(parts.all { it.clips.size in 1..NicheMix.PER_NICHE } && mixed.size == parts.sumOf { it.clips.size })
+        // Changing the account (follow, collections, preferences) needs your sign-in: a visitor must be refused.
+        for ((what, call) in listOf<Pair<String, suspend () -> Unit>>(
+            "follow a niche" to { api.followNiche(some.first(), true) },
+            "account preferences" to { api.accountPrefs() },
+        )) {
+            try { call(); org.junit.Assert.fail("a visitor could $what") } catch (e: AuthException) { say("$what: refused for a visitor, as it should be") }
+        }
+
         // One clip by ID: what a download uses to renew an expired address, and what a RedGifs link found on Reddit goes through.
         val again = api.clip(first.id)
         assertNotNull("clip by ID", again)
