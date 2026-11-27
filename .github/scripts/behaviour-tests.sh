@@ -16,7 +16,7 @@ adb install -g "$TESTS" > /dev/null
 adb logcat -c
 adb shell am instrument -w "$PKG.test/androidx.test.runner.AndroidJUnitRunner" | tee instrument.log
 if grep -q "^OK (" instrument.log; then exit 0; fi
-echo "--- the app's log"
-adb logcat -d -s RedGrab:V AndroidRuntime:E TestRunner:V | tail -150
+echo "--- test runner and crashes"
+adb logcat -d -s AndroidRuntime:E TestRunner:V | tail -150
 echo "::error::On-device tests failed"
 exit 1

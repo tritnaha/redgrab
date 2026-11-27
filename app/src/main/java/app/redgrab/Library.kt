@@ -606,6 +606,14 @@ class Library(private val ctx: Context) {
 
     fun setPartial(id: String, has: Boolean) = _state.update { it.copy(partial = if (has) it.partial + id else it.partial - id) }
 
+    /** Deletes what a download left unfinished for [id] and clears its "incomplete" mark (the clip is deleted on its site, or set aside). */
+    fun dropPartial(id: String) {
+        Quality.entries.forEach { q ->
+            fileUri("$id${q.suffix}.part")?.takeIf(::exists)?.let { runCatching { android.provider.DocumentsContract.deleteDocument(ctx.contentResolver, it) } }
+        }
+        setPartial(id, false)
+    }
+
     fun folder(): DocumentFile? {
         val uri: Uri = prefs.folderUri ?: return null
         return runCatching { DocumentFile.fromTreeUri(ctx, uri) }.getOrNull()?.takeIf { it.exists() && it.canWrite() }

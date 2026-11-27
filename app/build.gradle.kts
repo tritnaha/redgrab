@@ -65,11 +65,12 @@ android {
 
     signingConfigs {
         if (sharedKey.exists()) create("shared") {
-            // A key made by the Android tools, with their standard password; what is kept private is the file.
+            // A key made by the Android tools. Its passwords come from the environment when set
+            // (SIGNING_STORE_PASSWORD, SIGNING_KEY_PASSWORD, SIGNING_KEY_ALIAS); otherwise the tools' standard ones.
             storeFile = sharedKey
-            storePassword = "android"
-            keyAlias = "androiddebugkey"
-            keyPassword = "android"
+            storePassword = System.getenv("SIGNING_STORE_PASSWORD")?.takeIf { it.isNotEmpty() } ?: "android"
+            keyAlias = System.getenv("SIGNING_KEY_ALIAS")?.takeIf { it.isNotEmpty() } ?: "androiddebugkey"
+            keyPassword = System.getenv("SIGNING_KEY_PASSWORD")?.takeIf { it.isNotEmpty() } ?: "android"
         }
     }
 

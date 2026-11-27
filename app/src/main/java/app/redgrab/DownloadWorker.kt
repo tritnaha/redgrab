@@ -280,6 +280,8 @@ class DownloadWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(c
                         AppLog.w("${clip.id}: ${e.message}; marked as removed and not tried again")
                         lib.markFailed(clip.id, reasonFor(e), dead = true)
                         gone++
+                        // Nothing of it is left looking like an unfinished download.
+                        lib.dropPartial(clip.id)
                         prune(clip)
                     } else {
                         AppLog.e("Failed to save ${clip.id}: ${e.message}", e.takeUnless { it is HttpException || isNetworkError(it) })

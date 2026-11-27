@@ -708,7 +708,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         if (set.isEmpty()) return
         viewModelScope.launch(Dispatchers.IO) {
             library.setQueue(library.readQueue().filter { it.substringBefore(' ') !in set })
-            set.forEach { library.markFailed(it, Library.SKIPPED, dead = true) }
+            set.forEach { library.markFailed(it, Library.SKIPPED, dead = true); library.dropPartial(it) }
             AppLog.i("${set.size} unsaved clip(s) set aside; they won't be downloaded")
         }
     }

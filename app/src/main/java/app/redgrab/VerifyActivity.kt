@@ -88,6 +88,8 @@ class VerifyActivity : ComponentActivity() {
         w.layoutParams = android.view.ViewGroup.LayoutParams(android.view.ViewGroup.LayoutParams.MATCH_PARENT, android.view.ViewGroup.LayoutParams.MATCH_PARENT)
         w.settings.javaScriptEnabled = true
         w.settings.domStorageEnabled = true
+        w.settings.allowFileAccess = false
+        w.settings.allowContentAccess = false
         library.prefs.userAgent?.let { w.settings.userAgentString = it }
         // The page must stay on our own check: no navigation away (keeps the JS bridge private).
         w.webViewClient = object : WebViewClient() {

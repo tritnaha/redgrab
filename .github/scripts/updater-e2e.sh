@@ -40,7 +40,7 @@ run_jobs() {
   done
 }
 report() {
-  echo "--- the app's log"
+  echo "--- the app's log (builds from 13.12 on keep it out of the system log)"
   adb logcat -d -s RedGrab:V | tail -60
   echo "--- installer"
   adb logcat -d | grep -iE "PackageInstaller|InstallPackageHelper|INSTALL_FAILED|PackageManager.*$PKG" | tail -30

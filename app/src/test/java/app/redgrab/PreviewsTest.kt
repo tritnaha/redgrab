@@ -59,15 +59,19 @@ class PreviewsTest {
         assertEquals(205, Updater.buildOf("RedGrab-14.0-beta-205.APK"))
         assertEquals(null, Updater.buildOf("RedGrab-13.1.apk"))
         assertEquals(null, Updater.buildOf("notes.txt"))
+        val assets = "https://api.github.com/repos/${BuildConfig.GITHUB_REPO}/releases/assets"
         val r = Updater.parseRelease("""{"tag_name":"v13.2","name":"RedGrab 13.2","body":"- Fix one\n- Fix two","assets":[
-            {"name":"checksums.txt","url":"https://api.github.com/repos/o/r/releases/assets/1","size":10},
-            {"name":"RedGrab-13.2-15.apk","url":"https://api.github.com/repos/o/r/releases/assets/2","size":18153487}]}""")!!
+            {"name":"checksums.txt","url":"$assets/1","size":10},
+            {"name":"RedGrab-13.2-15.apk","url":"$assets/2","size":18153487}]}""")!!
         assertEquals("13.2", r.version); assertEquals(15, r.build)
-        assertEquals("https://api.github.com/repos/o/r/releases/assets/2", r.assetUrl)
+        assertEquals("$assets/2", r.assetUrl)
         assertEquals(18153487L, r.size)
         assertEquals("- Fix one\n- Fix two", r.notes)
         assertEquals(null, Updater.parseRelease("""{"tag_name":"v13.2","assets":[]}"""))
-        assertEquals("", Updater.parseRelease("""{"tag_name":"v1","body":null,"assets":[{"name":"a-2.apk","url":"u","size":1}]}""")!!.notes)
+        assertEquals("", Updater.parseRelease("""{"tag_name":"v1","body":null,"assets":[{"name":"a-2.apk","url":"$assets/9","size":1}]}""")!!.notes)
+        // A file that isn't one of this repository's own release assets is never fetched (the token would go with the request).
+        assertEquals(null, Updater.parseRelease("""{"tag_name":"v9","assets":[{"name":"RedGrab-9.0-99.apk","url":"https://example.com/RedGrab-9.0-99.apk","size":1}]}"""))
+        assertEquals(null, Updater.parseRelease("""{"tag_name":"v9","assets":[{"name":"RedGrab-9.0-99.apk","url":"https://api.github.com/repos/someone/else/releases/assets/5","size":1}]}"""))
     }
 
     @Test fun reportsNeverCarrySignInTokens() {
@@ -76,6 +80,8 @@ class PreviewsTest {
         val out = BugReport.redact(text)
         assertEquals("Signed in with [token removed] ok; token [token removed] and [token removed] end", out)
         assertEquals("Refresh done: 12 clips (3 liked)", BugReport.redact("Refresh done: 12 clips (3 liked)"))
+        // Stored sign-ins are removed by their exact value too, whatever they look like (a Reddit token has no telling shape).
+        assertEquals("Reddit said no to [removed] for u/[removed]", BugReport.redact("Reddit said no to 123456-AbCdEfGhIjKl for u/somebody", listOf("123456-AbCdEfGhIjKl", null, "somebody", "abc")))
     }
 
     @Test fun aDraggedIndicatorStaysOnTheGrid() {

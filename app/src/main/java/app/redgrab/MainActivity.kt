@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.offset
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.platform.LocalDensity
@@ -188,10 +189,16 @@ class MainActivity : ComponentActivity() {
                 vm.player?.let { PlayerScreen(vm, it) }
                 vm.editing?.let { EditorScreen(vm, it) }
                 vm.editingInfo?.let { InfoEditor(vm, it) }
+                // Locked: an opaque cover in this same window, there from the first frame. (The lock screen below is a
+                // window of its own, which also covers open dialogs but takes a moment to appear.)
+                if (AppLock.locked) Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)
+                    .pointerInput(Unit) { awaitPointerEventScope { while (true) awaitPointerEvent().changes.forEach { it.consume() } } })
                 LaunchedEffect(vm.facet) { if (vm.facet != null) goTo(0) }
                 LaunchedEffect(vm.discoverRequests) { if (vm.discoverRequests > 0) goTo(4) }
 
-                vm.shareChoice?.let { (clips, apps) ->
+                // Nothing below is shown while the app is locked: a dialog opened later would lie over the lock screen.
+                val unlocked = !AppLock.locked
+                vm.shareChoice?.takeIf { unlocked }?.let { (clips, apps) ->
                     AlertDialog(
                         onDismissRequest = vm::cancelShareChoice,
                         title = { Text("Share to") },
@@ -205,19 +212,19 @@ class MainActivity : ComponentActivity() {
                     )
                 }
 
-                vm.whatsNew?.let { app.redgrab.ui.WhatsNewDialog(it, vm::closeWhatsNew) }
+                vm.whatsNew?.takeIf { unlocked }?.let { app.redgrab.ui.WhatsNewDialog(it, vm::closeWhatsNew) }
                 // Asked once (first use, or first start after the update that brought it); the answer is kept.
                 if (vm.askContentPrefs && vm.whatsNew == null && !AppLock.locked) app.redgrab.ui.ContentPrefsDialog(vm, firstTime = true, onClose = vm::contentPrefsAnswered)
                 // An update that is downloaded is offered once per start; "Later" leaves it in Settings → About.
                 val updateState by Updater.state.collectAsStateWithLifecycle()
                 var updateDeclined by rememberSaveable { mutableIntStateOf(0) }
-                (updateState as? Updater.State.Ready)?.release?.takeIf { it.build != updateDeclined && vm.whatsNew == null }?.let { r ->
+                (updateState as? Updater.State.Ready)?.release?.takeIf { it.build != updateDeclined && vm.whatsNew == null && unlocked }?.let { r ->
                     app.redgrab.ui.UpdateReadyDialog(r, onInstall = { updateDeclined = r.build; vm.installUpdate() }, onLater = { updateDeclined = r.build })
                 }
                 // Last, so it lies over everything else, dialogs included.
                 if (AppLock.locked) app.redgrab.ui.LockScreen(AppLock.asking, onUnlock = { askIdentity("Unlock RedGrab") }, onLeave = { moveTaskToBack(true) })
 
-                vm.lastCrash?.let { crash ->
+                vm.lastCrash?.takeIf { unlocked }?.let { crash ->
                     AlertDialog(
                         onDismissRequest = vm::dismissCrash,
                         title = { Text("RedGrab closed unexpectedly") },

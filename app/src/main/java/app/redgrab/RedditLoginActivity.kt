@@ -28,6 +28,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -57,6 +58,8 @@ class RedditLoginActivity : ComponentActivity() {
     private val state: String = ByteArray(16).also { java.security.SecureRandom().nextBytes(it) }.joinToString("") { "%02x".format(it) }
     private var handled = false
     private var busy by mutableStateOf(false)
+    /** Host of the page the browser view is showing. */
+    private var pageHost by mutableStateOf("")
     private var message by mutableStateOf<String?>(null)
 
     /** Locked while this screen was out of sight: back to the main screen, which asks you to unlock. */
@@ -78,7 +81,7 @@ class RedditLoginActivity : ComponentActivity() {
                 Scaffold(
                     topBar = {
                         TopAppBar(
-                            title = { Text("Sign in to Reddit") },
+                            title = { androidx.compose.foundation.layout.Column { Text("Sign in to Reddit"); if (pageHost.isNotEmpty()) Text(pageHost, style = MaterialTheme.typography.labelSmall) } },
                             navigationIcon = { IconButton(onClick = { finish() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Close") } },
                         )
                     },
@@ -108,11 +111,17 @@ class RedditLoginActivity : ComponentActivity() {
         CookieManager.getInstance().setAcceptCookie(true)
         w.settings.javaScriptEnabled = true
         w.settings.domStorageEnabled = true
+        w.settings.allowFileAccess = false
+        w.settings.allowContentAccess = false
         w.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(view: WebView, req: WebResourceRequest): Boolean {
                 if (isRedirect(req.url)) { onRedirect(req.url); return true }
                 // Only web pages load here; other link types (app links, intents) are ignored.
                 return req.url.scheme != "https"
+            }
+
+            override fun onPageStarted(view: WebView, url: String?, favicon: android.graphics.Bitmap?) {
+                pageHost = runCatching { android.net.Uri.parse(url).host }.getOrNull().orEmpty()
             }
 
             override fun doUpdateVisitedHistory(view: WebView, url: String?, isReload: Boolean) = onNav(view.canGoBack())

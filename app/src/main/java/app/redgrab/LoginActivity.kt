@@ -56,6 +56,8 @@ import kotlin.coroutines.resume
  * captcha); the app only reads the resulting session token afterwards.
  */
 class LoginActivity : ComponentActivity() {
+    /** Host of the page the browser view is showing. */
+    private var pageHost by androidx.compose.runtime.mutableStateOf("")
 
     companion object {
         /** Open in "renew" mode: close automatically once a fresh token shows up. */
@@ -104,7 +106,8 @@ class LoginActivity : ComponentActivity() {
                 Scaffold(
                     topBar = {
                         TopAppBar(
-                            title = { Text("Sign in to RedGifs") },
+                            // The address of the page on show, so a page that isn't RedGifs can be told apart.
+                            title = { androidx.compose.foundation.layout.Column { Text("Sign in to RedGifs"); if (pageHost.isNotEmpty()) Text(pageHost, style = MaterialTheme.typography.labelSmall) } },
                             navigationIcon = {
                                 IconButton(onClick = { finish() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Close") }
                             },
@@ -168,6 +171,9 @@ class LoginActivity : ComponentActivity() {
         CookieManager.getInstance().setAcceptThirdPartyCookies(w, true)
         w.settings.javaScriptEnabled = true
         w.settings.domStorageEnabled = true
+        // A web page has no business reading files or other apps' content.
+        w.settings.allowFileAccess = false
+        w.settings.allowContentAccess = false
         w.webViewClient = object : WebViewClient() {
             override fun shouldInterceptRequest(view: WebView, req: WebResourceRequest): WebResourceResponse? {
                 if (onRedgifs && req.url.host == "api.redgifs.com") {
@@ -181,6 +187,7 @@ class LoginActivity : ComponentActivity() {
             }
 
             override fun onPageStarted(view: WebView, url: String?, favicon: android.graphics.Bitmap?) {
+                pageHost = runCatching { android.net.Uri.parse(url).host }.getOrNull().orEmpty()
                 onRedgifs = isRedgifs(url)
                 if (!onRedgifs) seenToken = null // a token seen earlier doesn't carry over to another site
             }

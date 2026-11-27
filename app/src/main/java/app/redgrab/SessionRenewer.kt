@@ -76,6 +76,8 @@ object SessionRenewer {
                 CookieManager.getInstance().setAcceptThirdPartyCookies(w, true)
                 w.settings.javaScriptEnabled = true
                 w.settings.domStorageEnabled = true
+                w.settings.allowFileAccess = false
+                w.settings.allowContentAccess = false
                 // The token is tied to the browser it was issued to: keep the one from sign-in.
                 w.settings.userAgentString = ua
                 w.settings.blockNetworkImage = true

@@ -1,19 +1,25 @@
 # Publishes a release when the version in app/build.gradle.kts is one that has no release yet.
-# The app's own updater (Settings → About) picks releases up from here.
+# The app's own updater picks releases up from here.
 #
 # Needs one repository secret, SIGNING_KEYSTORE_B64: the signing key file, base64-encoded. Every
 # release must be signed with the same key, or Android refuses to install it over the last one.
+# Optional secrets SIGNING_STORE_PASSWORD, SIGNING_KEY_PASSWORD and SIGNING_KEY_ALIAS, for a key
+# that doesn't use the Android tools' standard ones.
+#
+# The work is split into jobs so that the signing key and the right to publish are never in the
+# same place as code from outside this repository:
+#   build      has the signing key; runs only GitHub's own actions; hands the APKs on as an artifact
+#   test       no secrets, read-only: the last release is installed on an emulator, updated to this
+#              build, and has to start (.github/scripts/upgrade-smoke.sh)
+#   publish    may write releases; publishes exactly the APK the build job made
+#   behaviour  no secrets: the on-device tests (.github/scripts/behaviour-tests.sh); can't hold a release up
+#   updater    no secrets: after publishing, the release before is installed and has to update
+#              itself through the app's own updater (.github/scripts/updater-e2e.sh); can't hold a release up
 #
 # The emulator runs Android 16 (API 36); older versions are not tested.
 #
-# Before publishing, the build is run on an emulator (GitHub's Linux runners have hardware
-# acceleration for it): the last release is installed and updated to this build, and the app has
-# to start. See .github/scripts/upgrade-smoke.sh. "Run workflow" with "smoke" ticked does the
-# build and that test without publishing anything.
-#
-# After publishing, the app's own updater is tried end to end on an emulator (.github/scripts/
-# updater-e2e.sh): the release before is installed and has to update itself to the new one.
-# "Run workflow" with "updater" ticked runs just that against the two latest releases.
+# "Run workflow" with "smoke" ticked builds and tests without publishing anything; with "updater"
+# ticked it runs the in-app update test against the two latest releases.
 name: Release
 
 on:
@@ -23,7 +29,7 @@ on:
   workflow_dispatch:
     inputs:
       smoke:
-        description: Build and run the emulator test even if this version is already published (publishes nothing new)
+        description: Build and run the emulator tests even if this version is already published (publishes nothing new)
         type: boolean
         default: false
       updater:
@@ -32,26 +38,30 @@ on:
         default: false
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: release
   cancel-in-progress: false
 
 jobs:
-  release:
+  build:
     runs-on: ubuntu-latest
-    timeout-minutes: 50
-    env:
-      GH_TOKEN: ${{ github.token }}
+    timeout-minutes: 30
+    outputs:
+      name: ${{ steps.version.outputs.name }}
+      build: ${{ steps.version.outputs.build }}
+      published: ${{ steps.version.outputs.published }}
+      work: ${{ steps.version.outputs.work }}
     steps:
       - uses: actions/checkout@v5
         with:
-          fetch-depth: 0
+          persist-credentials: false
 
       - name: Read the version
         id: version
         env:
+          GH_TOKEN: ${{ github.token }}
           SMOKE: ${{ inputs.smoke }}
         run: |
           name=$(sed -n 's/^ *versionName = "\(.*\)".*/\1/p' app/build.gradle.kts | head -1)
@@ -76,36 +86,66 @@ jobs:
           fi
           mkdir -p signing
           echo "$KEY" | base64 -d > signing/release.keystore
+          chmod 600 signing/release.keystore
 
       - uses: actions/setup-java@v5
         if: steps.version.outputs.work == 'true'
         with:
           distribution: temurin
           java-version: '21'
-
-      # Keeps Gradle's downloads and build cache between runs: most of a build's time otherwise.
-      - uses: gradle/actions/setup-gradle@v4
-        if: steps.version.outputs.work == 'true'
+          # Keeps Gradle's downloads between runs.
+          cache: gradle
 
       - name: Build
         if: steps.version.outputs.work == 'true'
-        run: |
-          echo "sdk.dir=$ANDROID_HOME" > local.properties
-          ./gradlew testDebugUnitTest assembleRelease assembleDebug assembleDebugAndroidTest
         env:
+          SIGNING_STORE_PASSWORD: ${{ secrets.SIGNING_STORE_PASSWORD }}
+          SIGNING_KEY_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD }}
+          SIGNING_KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS }}
           # Optional repository variable: a Reddit "installed app" client ID to build in (not a secret).
           REDDIT_CLIENT_ID: ${{ vars.REDDIT_CLIENT_ID }}
+        run: |
+          echo "sdk.dir=$ANDROID_HOME" > local.properties
+          ./gradlew --no-daemon testDebugUnitTest assembleRelease assembleDebug assembleDebugAndroidTest
 
+      - name: Remove the signing key
+        if: always()
+        run: rm -rf signing
+
+      - uses: actions/upload-artifact@v4
+        if: steps.version.outputs.work == 'true'
+        with:
+          name: apks
+          retention-days: 3
+          if-no-files-found: error
+          path: |
+            app/build/outputs/apk/release/app-release.apk
+            app/build/outputs/apk/debug/app-debug.apk
+            app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
+
+  # The release must survive being installed over the last one.
+  test:
+    needs: build
+    if: needs.build.outputs.work == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: apks
+          path: app/build/outputs/apk
       - name: Allow the emulator to use hardware acceleration
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
-
-      # The release must survive being installed over the last one.
       - name: Update test on an emulator
-        if: steps.version.outputs.work == 'true'
         uses: reactivecircus/android-emulator-runner@v2
+        env:
+          GH_TOKEN: ${{ github.token }}
         with:
           api-level: 36
           arch: x86_64
@@ -115,11 +155,26 @@ jobs:
           emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
           script: bash .github/scripts/upgrade-smoke.sh app/build/outputs/apk/release/app-release.apk
 
+  publish:
+    needs: [build, test]
+    if: needs.build.outputs.published == 'false'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: apks
+          path: app/build/outputs/apk
       - name: Publish
-        if: steps.version.outputs.published == 'false'
         env:
-          NAME: ${{ steps.version.outputs.name }}
-          BUILD: ${{ steps.version.outputs.build }}
+          GH_TOKEN: ${{ github.token }}
+          NAME: ${{ needs.build.outputs.name }}
+          BUILD: ${{ needs.build.outputs.build }}
         run: |
           apk="RedGrab-$NAME-$BUILD.apk"
           cp app/build/outputs/apk/release/app-release.apk "$apk"
@@ -129,29 +184,28 @@ jobs:
           printf '\n[All changes](https://github.com/%s/blob/%s/CHANGELOG.md)\n' "$GITHUB_REPOSITORY" "$GITHUB_SHA" >> notes.md
           gh release create "v$NAME" "$apk" --title "RedGrab $NAME" --notes-file notes.md --target "$GITHUB_SHA"
 
-      # The app's own updater, end to end: the release before this one is installed and has to find,
-      # download and install the release just published. It can't hold a release up (it runs after
-      # publishing, and depends on GitHub answering the emulator): a failure only shows here.
-      - name: In-app update test on an emulator
-        if: steps.version.outputs.published == 'false' || inputs.updater
-        continue-on-error: true
-        timeout-minutes: 20
-        uses: reactivecircus/android-emulator-runner@v2
+  # The on-device behaviour tests (place kept across tabs, Back, the grid following the clip view, search
+  # suggestions, the screens opening). They run beside the update test and can't hold a release up.
+  behaviour:
+    needs: build
+    if: needs.build.outputs.work == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v5
         with:
-          api-level: 36
-          arch: x86_64
-          target: google_apis
-          profile: pixel_6
-          disable-animations: true
-          emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
-          script: bash .github/scripts/updater-e2e.sh
-
-      # The on-device behaviour tests (place kept across tabs, Back, the grid following the clip view, the
-      # screens opening). They run after publishing and can't hold a release up: a failure only shows here.
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: apks
+          path: app/build/outputs/apk
+      - name: Allow the emulator to use hardware acceleration
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
       - name: Behaviour tests on an emulator
-        if: steps.version.outputs.work == 'true'
-        continue-on-error: true
-        timeout-minutes: 12
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 36
@@ -161,3 +215,34 @@ jobs:
           disable-animations: true
           emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
           script: bash .github/scripts/behaviour-tests.sh
+
+  # The app's own updater, end to end: the release before the latest is installed and has to find,
+  # download and install the latest by itself. Depends on GitHub answering the emulator without a
+  # token, which it only does for a public repository.
+  updater:
+    needs: [build, publish]
+    if: always() && (needs.publish.result == 'success' || inputs.updater)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - name: Allow the emulator to use hardware acceleration
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: In-app update test on an emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        env:
+          GH_TOKEN: ${{ github.token }}
+        with:
+          api-level: 36
+          arch: x86_64
+          target: google_apis
+          profile: pixel_6
+          disable-animations: true
+          emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
+          script: bash .github/scripts/updater-e2e.sh

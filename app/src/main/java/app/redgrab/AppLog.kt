@@ -45,7 +45,9 @@ object AppLog {
 
     @Synchronized
     private fun write(level: String, msg: String, t: Throwable?) {
-        when (level) {
+        // The log names what you opened. In a release build it stays in the app's own file: the system log
+        // can be read over USB, also while the app is locked.
+        if (BuildConfig.DEBUG) when (level) {
             "E" -> Log.e(TAG, msg, t)
             "W" -> Log.w(TAG, msg, t)
             else -> Log.i(TAG, msg)

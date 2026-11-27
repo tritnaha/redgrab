@@ -464,7 +464,9 @@ fun SettingsScreen(vm: MainViewModel, onSignIn: () -> Unit, onOpenLog: () -> Uni
                 var token by remember(vm.githubToken) { mutableStateOf(vm.githubToken) }
                 OutlinedTextField(token, { token = it.trim() }, singleLine = true, label = { Text("GitHub token (private repository only)") },
                     visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
-                    supportingText = { Text("Only for \"Send to GitHub\" in Report a problem (Issues: read and write). Updates work without it.") },
+                    // A password field to the keyboard too: nothing is learned, suggested or synced.
+                    keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Password, autoCorrectEnabled = false),
+                    supportingText = { Text("Private repository: updates need it (Contents: read). \"Send to GitHub\" needs Issues: read and write.") },
                     modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 4.dp))
                 Row(Modifier.padding(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     if (token != vm.githubToken) Button(onClick = { vm.changeGithubToken(token) }) { Text("Save") }

@@ -61,6 +61,9 @@ object Updater {
     private val _state = MutableStateFlow<State>(State.Idle)
     val state: StateFlow<State> = _state
     private val lock = Mutex()
+    /** GitHub turned the stored token down at the last check: the download doesn't send it either. */
+    @Volatile private var tokenRefused = false
+    private fun tokenFor(ctx: Context): String? = ctx.library.prefs.githubToken.takeUnless { tokenRefused }
 
     private const val API = "https://api.github.com/repos/${BuildConfig.GITHUB_REPO}"
     const val PAGE = "https://github.com/${BuildConfig.GITHUB_REPO}"
@@ -76,6 +79,8 @@ object Updater {
         for (i in 0 until assets.length()) {
             val a = assets.optJSONObject(i) ?: continue
             val build = buildOf(a.optString("name")) ?: continue
+            // The file is only ever fetched from this repository's own release assets (the token goes along with the request).
+            if (!a.optString("url").startsWith("$API/releases/assets/")) continue
             return Release(
                 version = j.optString("tag_name").removePrefix("v").ifEmpty { j.optString("name") }, build = build,
                 assetUrl = a.optString("url"), size = a.optLong("size"),
@@ -109,6 +114,7 @@ object Updater {
                 val refused = http.newCall(request("$API/releases/latest", token, "application/vnd.github+json").build()).execute().use { it.code == 401 || it.code == 403 }
                 if (refused) { AppLog.w("GitHub didn't accept the stored token; checking for updates without it"); token = null }
             }
+            tokenRefused = token == null && !prefs.githubToken.isNullOrBlank()
             http.newCall(request("$API/releases/latest", token, "application/vnd.github+json").build()).execute().use { r ->
                 val body = r.body?.string().orEmpty()
                 if (r.code == 404 && repoIsPublic(ctx) == true) {
@@ -148,8 +154,8 @@ object Updater {
                 _state.value = State.Downloading(r, 0)
                 val http = RedGifsApi.clientFor(ctx.userAgent)
                 // The asset's API address answers with the file itself when asked for "octet-stream".
-                http.newCall(request(r.assetUrl, ctx.library.prefs.githubToken, "application/octet-stream").build()).execute().use { resp ->
-                    if (!resp.isSuccessful) throw HttpException(resp.code, explain(resp.code, !ctx.library.prefs.githubToken.isNullOrBlank()))
+                http.newCall(request(r.assetUrl, tokenFor(ctx), "application/octet-stream").build()).execute().use { resp ->
+                    if (!resp.isSuccessful) throw HttpException(resp.code, explain(resp.code, !tokenFor(ctx).isNullOrBlank()))
                     val part = File(out.path + ".part")
                     part.outputStream().use { o ->
                         val input = resp.body!!.byteStream()
@@ -169,6 +175,9 @@ object Updater {
                     // It must be this app, and a newer build, before it is offered to the installer.
                     val info = ctx.packageManager.getPackageArchiveInfo(part.path, 0)
                     if (info == null || info.packageName != ctx.packageName) throw java.io.IOException("The file isn't a RedGrab build")
+                    // Android's installer refuses an older build or another signer anyway; checking here avoids handing it one again and again.
+                    if (androidx.core.content.pm.PackageInfoCompat.getLongVersionCode(info) <= BuildConfig.VERSION_CODE) throw java.io.IOException("The file isn't newer than this build")
+                    if (signedDifferently(ctx, part.path)) throw java.io.IOException("The file is signed with a different key")
                     if (!part.renameTo(out)) throw java.io.IOException("Couldn't store the update")
                 }
                 AppLog.i("Update ${r.version} downloaded (${Format.size(out.length())})")
@@ -181,6 +190,17 @@ object Updater {
             }
         }
     }
+
+    /** True only when both signers can be read and they differ; anything unreadable is left to Android's installer to judge. */
+    private fun signedDifferently(ctx: Context, apkPath: String): Boolean = runCatching {
+        if (Build.VERSION.SDK_INT < 28) return false
+        val pm = ctx.packageManager
+        fun certs(i: android.content.pm.PackageInfo?) = i?.signingInfo?.let { si -> (if (si.hasMultipleSigners()) si.apkContentsSigners else si.signingCertificateHistory) }
+            ?.map { java.util.Base64.getEncoder().encodeToString(java.security.MessageDigest.getInstance("SHA-256").digest(it.toByteArray())) }?.toSet()
+        val mine = certs(pm.getPackageInfo(ctx.packageName, android.content.pm.PackageManager.GET_SIGNING_CERTIFICATES))
+        val theirs = certs(pm.getPackageArchiveInfo(apkPath, android.content.pm.PackageManager.GET_SIGNING_CERTIFICATES))
+        if (mine.isNullOrEmpty() || theirs.isNullOrEmpty()) false else mine.intersect(theirs).isEmpty()
+    }.getOrDefault(false)
 
     /**
      * Hands the downloaded APK to Android's installer. On Android 12 and later an app may update
@@ -327,7 +347,15 @@ object BugReport {
     /** Things that must never leave the phone: anything that looks like a sign-in token. */
     private val TOKEN = Regex("(eyJ[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]{5,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})")
 
-    fun redact(text: String) = TOKEN.replace(text, "[token removed]")
+    /** Removes anything shaped like a token, and the exact values in [known] (the stored sign-ins, whatever they look like). */
+    fun redact(text: String, known: List<String?> = emptyList()): String {
+        var out = text
+        for (k in known) if (k != null && k.length >= 6) out = out.replace(k, "[removed]")
+        return TOKEN.replace(out, "[token removed]")
+    }
+
+    /** The stored sign-ins and account names, for [redact]. */
+    fun secrets(ctx: Context): List<String?> = ctx.library.prefs.let { listOf(it.token, it.redditAccess, it.redditRefresh, it.githubToken, it.redditUser) }
 
     /** The app, phone and state details as "name: value" lines. */
     fun details(ctx: Context): String {
@@ -358,7 +386,7 @@ object BugReport {
     /** The whole report as text: what you wrote, the details, and the end of the Activity log. */
     fun build(ctx: Context, description: String, logChars: Int = 40_000): String {
         val log = AppLog.read().takeLast(logChars)
-        return redact(buildString {
+        return redact(known = secrets(ctx), text = buildString {
             if (description.isNotBlank()) append(description.trim()).append("\n\n")
             append("### Details\n```\n").append(details(ctx)).append("\n```\n\n")
             append("### Activity log (most recent last)\n```\n").append(log.ifBlank { "(empty)" }).append("\n```\n")

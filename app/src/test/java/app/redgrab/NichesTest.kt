@@ -98,6 +98,18 @@ class NichesTest {
         assertTrue(fake.api().suggestTags("  ").isEmpty())
     }
 
+    @Test fun deletedClipsAreTakenOutOfACollectionAsTheSiteDoes() = runBlocking {
+        val fake = Fake { 200 to "{}" }
+        fake.api().removeFromCollection("abc123", listOf("clipone", "cliptwo"))
+        val req = fake.seen.single()
+        assertEquals("DELETE /v2/me/collections/abc123/gifs", req.method + " " + req.url.encodedPath)
+        // The body is the list of clip IDs itself, as the site's own "remove selected" sends it.
+        assertEquals("""["clipone","cliptwo"]""", fake.bodies.single())
+        // Nothing to remove: nothing is asked.
+        fake.api().removeFromCollection("abc123", emptyList())
+        assertEquals(1, fake.seen.size)
+    }
+
     @Test fun collectionsAreCreatedAndFilledAsTheSiteDoes() = runBlocking {
         val fake = Fake { req ->
             when {

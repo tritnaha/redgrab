@@ -61,8 +61,12 @@ class KeystoreBox(private val alias: String = "redgrab.secrets.v1") : SecretBox 
 
 /**
  * Where sign-in secrets are kept: the RedGifs session token, Reddit's tokens and the GitHub token.
- * Each is stored encrypted (see [KeystoreBox]) in its own preferences file; nothing readable is
- * written to the phone. Decrypted values are held in memory while the app runs.
+ * Each is stored encrypted (see [KeystoreBox]) in its own preferences file; this class writes
+ * nothing readable to the phone. Decrypted values are held in memory while the app runs.
+ *
+ * One limit: the built-in browser view keeps the RedGifs site's own login (its cookies and page
+ * storage) the way any browser does, in the app's private data and not under this key. That is
+ * what lets an expired session be renewed without signing in again; signing out removes it.
  *
  * If a value can't be decrypted (the key was lost, say after the app's data was copied from another
  * phone) it is dropped: you sign in again. If the Keystore can't be used at all, a secret is kept

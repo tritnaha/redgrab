@@ -114,4 +114,9 @@ fun copyText(ctx: Context, label: String, text: String) {
     ctx.getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText(label, text))
 }
 
-fun copyLog(ctx: Context) = copyText(ctx, "RedGrab log", AppLog.read())
+/** The log without sign-ins, marked as sensitive so the keyboard and clipboard previews don't show it. */
+fun copyLog(ctx: Context) {
+    val clip = ClipData.newPlainText("RedGrab log", app.redgrab.BugReport.redact(AppLog.read(), app.redgrab.BugReport.secrets(ctx)))
+    if (android.os.Build.VERSION.SDK_INT >= 33) clip.description.extras = android.os.PersistableBundle().apply { putBoolean(android.content.ClipDescription.EXTRA_IS_SENSITIVE, true) }
+    ctx.getSystemService(ClipboardManager::class.java).setPrimaryClip(clip)
+}
