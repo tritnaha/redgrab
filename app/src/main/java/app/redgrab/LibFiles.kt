@@ -376,9 +376,14 @@ internal fun Library.walk(tree: Uri): List<Pair<Library.Doc, String>> {
  * the same size is not copied again, so an interrupted move simply continues when started again.
  * Returns (moved, failed).
  */
-suspend fun Library.moveIntoApp(onProgress: (String) -> Unit): Pair<Int, Int> = withContext(Dispatchers.IO) {
-    val from = prefs.folderUri ?: return@withContext 0 to 0
-    if (PrivateDocs.isPrivate(from)) return@withContext 0 to 0
+suspend fun Library.moveIntoApp(onProgress: (String) -> Unit): Pair<Int, Int> {
+    val from = prefs.folderUri ?: return 0 to 0
+    if (PrivateDocs.isPrivate(from)) return 0 to 0 // already inside
+    return moveTreeIntoApp(from, onProgress)
+}
+
+/** The move itself, from the folder [from]. */
+internal suspend fun Library.moveTreeIntoApp(from: Uri, onProgress: (String) -> Unit): Pair<Int, Int> = withContext(Dispatchers.IO) {
     val resolver = ctx.contentResolver
     val dest = PrivateDocs.dir(ctx)
     val files = walk(from).filter { (d, _) -> d.name != ".nomedia" }

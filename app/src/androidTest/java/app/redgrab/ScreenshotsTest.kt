@@ -379,8 +379,9 @@ class ScreenshotsTest {
             // The old folder is reached as documents too: through the private store's own interface, one level up.
             val oldTree = android.provider.DocumentsContract.buildTreeDocumentUri(PrivateDocs.AUTHORITY, "clips/old")
             File(PrivateDocs.dir(app), "old").deleteRecursively(); old.copyRecursively(File(PrivateDocs.dir(app), "old")); old.deleteRecursively()
-            lib.prefs.folderUri = oldTree
-            val (moved, failed) = kotlinx.coroutines.runBlocking { lib.moveIntoApp { } }
+            // (The public call refuses a folder that is already inside the app, so the move itself is called.)
+            check(kotlinx.coroutines.runBlocking { lib.prefs.folderUri = PrivateDocs.TREE; lib.moveIntoApp { } } == (0 to 0))
+            val (moved, failed) = kotlinx.coroutines.runBlocking { lib.moveTreeIntoApp(oldTree) { } }
             check(moved == 3 && failed == 0) { "moved $moved, failed $failed" }
             check(File(PrivateDocs.dir(app), "a-hd.mp4").length() == 4000L && File(PrivateDocs.dir(app), "imported/c.gif").length() == 900L) { "the moved files aren't in place" }
             check(File(PrivateDocs.dir(app), "old").walkTopDown().none { it.isFile && it.name != ".nomedia" }) { "originals were left behind" }
