@@ -157,6 +157,12 @@ class Prefs(context: Context) : RedditStore {
         sp.edit { putString("recent.$source", (listOf(q) + recent(source).filter { !it.equals(q, ignoreCase = true) }).take(12).joinToString("\n")) }
     }
 
+    /** What you follow on a site that has no following of its own (hashtags, searches, boards). Kept in the app, newest first. */
+    fun follows(source: String): List<String> = sp.getString("follow.$source", "")!!.split('\n').filter { it.isNotBlank() }
+
+    fun setFollows(source: String, list: List<String>) =
+        sp.edit { putString("follow.$source", list.map { it.trim().replace('\n', ' ') }.filter { it.isNotEmpty() }.distinctBy { it.lowercase() }.take(40).joinToString("\n")) }
+
     /** Which kinds of content the Online tab shows (see ContentPrefs); gay and trans off unless you choose. */
     var contentPrefs: Set<String>
         get() = sp.getString("contentPrefs", null)?.split(',')?.filterTo(LinkedHashSet()) { it in ContentPrefs.ALL } ?: ContentPrefs.DEFAULT

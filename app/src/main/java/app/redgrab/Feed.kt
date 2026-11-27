@@ -105,15 +105,18 @@ sealed interface Feed {
         override val query get() = "@$name"
     }
 
-    // sex.com (GIF search; an empty search isn't accepted)
+    // sex.com: a GIF search; with nothing typed, the most liked (as the site's own /gifs/ page lists them)
     data class SexSearch(override val query: String) : Feed {
-        override val title get() = query
+        override val title get() = query.ifBlank { "Popular" }
         override val source get() = OnlineSource.SexCom
-        override val needsQuery get() = query.isBlank()
         override val numbered get() = true
     }
 
-    // EroMe (albums found by search, or one uploader's albums)
+    // EroMe: the site's own "explore" lists, albums found by search, or one uploader's albums
+    data class EromeExplore(val newest: Boolean) : Feed {
+        override val title get() = if (newest) "New" else "Hot"
+        override val source get() = OnlineSource.EroMe
+    }
     data class EromeSearch(override val query: String) : Feed {
         override val title get() = query
         override val source get() = OnlineSource.EroMe
@@ -125,9 +128,9 @@ sealed interface Feed {
         override val query get() = "@$name"
     }
 
-    // 4chan /gif/: every thread, or the threads whose subject has the words
-    data class ChanThreads(override val query: String) : Feed {
-        override val title get() = query.ifBlank { "/${FourChanApi.BOARD}/" }
+    // 4chan: every thread of a board, or the threads whose subject has the words
+    data class ChanThreads(override val query: String, val board: String = FourChanApi.BOARD) : Feed {
+        override val title get() = if (query.isBlank()) "/$board/" else "/$board/ $query"
         override val source get() = OnlineSource.FourChan
     }
 
@@ -139,7 +142,7 @@ sealed interface Feed {
             OnlineSource.Reddit -> RedditHome
             OnlineSource.FikFap -> FikFapTag("")
             OnlineSource.SexCom -> SexSearch("")
-            OnlineSource.EroMe -> EromeSearch("")
+            OnlineSource.EroMe -> EromeExplore(false)
             OnlineSource.FourChan -> ChanThreads("")
         }
 
@@ -166,8 +169,8 @@ sealed interface Feed {
                 OnlineSource.FikFap -> if (t.startsWith("@")) t.drop(1).trim().let { if (it.isEmpty()) FikFapTag("") else FikFapUser(it) }
                     else FikFapTag(t.trimStart('#').trim())
                 OnlineSource.SexCom -> SexSearch(t)
-                OnlineSource.EroMe -> if (t.startsWith("@")) EROME_NAME.find(t.drop(1).trim())?.value?.let { EromeUser(it) } ?: EromeSearch("")
-                    else EromeSearch(t)
+                OnlineSource.EroMe -> if (t.startsWith("@")) EROME_NAME.find(t.drop(1).trim())?.value?.let { EromeUser(it) } ?: EromeExplore(false)
+                    else if (t.isEmpty()) EromeExplore(false) else EromeSearch(t)
                 OnlineSource.FourChan -> ChanThreads(t)
             }
         }

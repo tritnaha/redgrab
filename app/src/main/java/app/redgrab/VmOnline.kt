@@ -175,6 +175,8 @@ fun MainViewModel.tagsIn(query: String): List<String>? = searchIndex.tagNames.ta
  */
 fun MainViewModel.feedFor(source: OnlineSource, text: String): Feed {
     if (source == OnlineSource.RedGifs) tagsIn(text)?.let { return Feed.Tags(it) }
+    // A search on 4chan stays on the board that is open.
+    if (source == OnlineSource.FourChan) return Feed.ChanThreads(text.trim(), (discover.feed as? Feed.ChanThreads)?.board ?: FourChanApi.BOARD)
     return Feed.fromQuery(source, text)
 }
 
@@ -403,32 +405,60 @@ internal suspend fun MainViewModel.fetchPage(d: DiscoverState, next: Int): Onlin
         is Feed.FikFapTag -> FikFapApi(http).tagPosts(f.tag, d.cursor, next)
         is Feed.FikFapUser -> FikFapApi(http).userPosts(f.name, d.cursor, next)
         is Feed.SexSearch -> SexComApi(http).search(f.query, next)
+        is Feed.EromeExplore -> EromeApi(http).explore(f.newest, d.cursor, next)
         is Feed.EromeSearch -> EromeApi(http).search(f.query, d.cursor, next)
         is Feed.EromeUser -> EromeApi(http).user(f.name, d.cursor, next)
-        is Feed.ChanThreads -> FourChanApi(http).threads(f.query, d.cursor, next)
+        is Feed.ChanThreads -> FourChanApi(http, f.board).threads(f.query, d.cursor, next)
         is Feed.AllSites -> {
             val place = AllSites.decode(d.cursor)
-            val subs = AllSites.feeds(f.query, redGifs = prefs.signedIn, reddit = !prefs.redditClientId.isNullOrBlank(),
-                personal = d.niches.isNotEmpty() || followedTags.isNotEmpty() || !d.nichesLoaded).filter { it.source.name !in place.done }
+            fun subsFor(page: Int) = AllSites.feeds(f.query, redGifs = prefs.signedIn, reddit = !prefs.redditClientId.isNullOrBlank(),
+                personal = d.niches.isNotEmpty() || followedTags.isNotEmpty() || !d.nichesLoaded, follows = siteFollows, page = page)
+            val subs = subsFor(next).filter { it.key !in place.done }
             val cursors = HashMap(place.cursors)
             val done = HashSet(place.done)
-            val parts = subs.map { sub ->
-                val name = sub.source.name
+            val parts = subs.map { (key, sub) ->
                 try {
-                    val sd = d.copy(feed = sub, order = if (d.order in sub.orders) d.order else OnlineOrder.Trending, cursor = place.cursors[name])
-                    val pg = try { fetchPage(sd, next) } catch (e: NoNichesException) { fetchPage(sd.copy(feed = Feed.Search("")), next) }
-                    if (pg.cursor != null) cursors[name] = pg.cursor else cursors.remove(name)
-                    if (!pg.hasMore || (pg.clips.isEmpty() && pg.cursor == null)) done += name
+                    val sd = d.copy(feed = sub, order = if (d.order in sub.orders) d.order else OnlineOrder.Trending, cursor = place.cursors[key])
+                    // A list that is one of several on its site (something you follow) counts its own pages.
+                    val turn = if ('|' in key) (siteFollows[sub.source]?.size ?: 1).coerceAtLeast(1).let { n -> (next - 1) * minOf(AllSites.FOLLOWS_PER_PAGE, n) / n + 1 } else next
+                    val pg = try { fetchPage(sd, turn) } catch (e: NoNichesException) { fetchPage(sd.copy(feed = Feed.Search("")), next) }
+                    if (pg.cursor != null) cursors[key] = pg.cursor else cursors.remove(key)
+                    if (!pg.hasMore || (pg.clips.isEmpty() && pg.cursor == null)) done += key
                     pg.clips
                 } catch (e: kotlinx.coroutines.CancellationException) { throw e }
                 catch (e: Exception) {
-                    // One site failing (not set up, down, blocked) doesn't stop the others; it sits out the rest of this feed.
-                    AppLog.w("All sites: ${sub.source.label} left out: ${e.message}")
-                    done += name
+                    // One list failing (site not set up, down, blocked) doesn't stop the others; it sits out the rest of this feed.
+                    AppLog.w("All sites: ${sub.source.label} (${sub.title}) left out: ${e.message}")
+                    done += key
                     emptyList()
                 }
             }
-            OnlinePage(NicheMix.interleave(parts), next, 0, cursor = AllSites.encode(AllSites.Place(cursors, done)), more = subs.any { it.source.name !in done })
+            // More to come while any list of this page or the next (other follows take their turn there) hasn't run out.
+            val more = (subs + subsFor(next + 1)).any { it.key !in done }
+            OnlinePage(NicheMix.interleave(parts), next, 0, cursor = AllSites.encode(AllSites.Place(cursors, done)), more = more)
+        }
+    }
+}
+
+/** Whether [query] is followed on [source] (sites without following of their own; kept in the app). */
+fun MainViewModel.followsOn(source: OnlineSource, query: String): Boolean = siteFollows[source].orEmpty().any { it.equals(query.trim(), ignoreCase = true) }
+
+fun MainViewModel.toggleSiteFollow(source: OnlineSource, query: String) {
+    val q = query.trim()
+    if (q.isEmpty()) return
+    val now = siteFollows[source].orEmpty()
+    prefs.setFollows(source.name, if (followsOn(source, q)) now.filter { !it.equals(q, ignoreCase = true) } else listOf(q) + now)
+    siteFollows = siteFollows + (source to prefs.follows(source.name))
+    AppLog.i("${source.label}: ${siteFollows[source]?.size ?: 0} followed")
+}
+
+/** 4chan's boards, for the row of boards (asked once). */
+fun MainViewModel.loadChanBoards() {
+    if (sfw || chanBoards.isNotEmpty()) return
+    viewModelScope.launch {
+        chanBoards = withContext(Dispatchers.IO) {
+            runCatching { FourChanApi(RedGifsApi.clientFor(getApplication<Application>().userAgent)).boards() }
+                .onFailure { AppLog.w("4chan's board list not read: ${it.message}") }.getOrDefault(emptyList())
         }
     }
 }

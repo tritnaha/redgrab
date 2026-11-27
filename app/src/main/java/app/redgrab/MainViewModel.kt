@@ -285,6 +285,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     // properties from top to bottom, so anything here may use every property above it. (In 13.6 it sat
     // further up and used the changelog before that existed, which stopped the app on the first start
     // after an update.)
+    /** What you follow on the sites that have no following of their own, by site. */
+    var siteFollows by mutableStateOf(OnlineSource.SITES.associateWith { prefs.follows(it.name) })
+        internal set
+    /** 4chan's boards, once asked for. */
+    var chanBoards by mutableStateOf<List<FourChanApi.Board>>(emptyList())
+        internal set
+
     init {
         refreshFolderInfo()
         // When a download run ends, no Save button is left showing progress.

@@ -239,18 +239,36 @@ class NichesTest {
     // ---- all sites ------------------------------------------------------------------------
 
     @Test fun allSitesAsksEachSiteThatCanAnswer() {
-        // Nothing typed: only sites that have a feed without a search, and only those that are set up.
-        assertEquals(listOf(Feed.MyNiches, Feed.RedditHome, Feed.ChanThreads("")), AllSites.feeds("", redGifs = true, reddit = true, personal = true))
-        assertEquals(listOf(Feed.Search(""), Feed.ChanThreads("")), AllSites.feeds("", redGifs = true, reddit = false, personal = false))
-        assertEquals(listOf(Feed.ChanThreads("")), AllSites.feeds(" ", redGifs = false, reddit = false, personal = false))
+        fun feeds(q: String, redGifs: Boolean, reddit: Boolean, personal: Boolean) = AllSites.feeds(q, redGifs, reddit, personal).map { it.feed }
+        // Nothing typed: what each site lists by itself, and only the sites that are set up. FikFap has nothing without a hashtag.
+        val own = listOf(Feed.SexSearch(""), Feed.EromeExplore(false), Feed.ChanThreads(""))
+        assertEquals(listOf(Feed.MyNiches, Feed.RedditHome) + own, feeds("", redGifs = true, reddit = true, personal = true))
+        assertEquals(listOf<Feed>(Feed.Search("")) + own, feeds("", redGifs = true, reddit = false, personal = false))
+        assertEquals(own, feeds(" ", redGifs = false, reddit = false, personal = false))
         // Something typed: every site is searched for it, each in its own way.
         assertEquals(
             listOf(Feed.Search("night sky"), Feed.Subreddit("nightsky"), Feed.FikFapTag("nightsky"), Feed.SexSearch("night sky"), Feed.EromeSearch("night sky"), Feed.ChanThreads("night sky")),
-            AllSites.feeds("night sky", redGifs = true, reddit = true, personal = true))
+            feeds("night sky", redGifs = true, reddit = true, personal = true))
         // No feed of "All sites" is itself "All sites".
-        assertTrue(AllSites.feeds("x", true, true, true).none { it.source == OnlineSource.All })
+        assertTrue(feeds("x", true, true, true).none { it.source == OnlineSource.All })
         assertEquals(Feed.AllSites("x"), Feed.fromQuery(OnlineSource.All, " x "))
         assertEquals(Feed.AllSites(""), Feed.home(OnlineSource.All))
+    }
+
+    @Test fun allSitesMixesWhatYouFollowOnEachSite() {
+        val follows = mapOf(OnlineSource.FikFap to listOf("dance", "beach", "night"), OnlineSource.EroMe to listOf("@Some.One"), OnlineSource.FourChan to emptyList())
+        fun page(n: Int) = AllSites.feeds("", redGifs = true, reddit = false, personal = true, follows = follows, page = n)
+        // Two of a site's follows a page, taking turns; a site with one follow shows it every page; a site without shows its own list.
+        assertEquals(
+            listOf("RedGifs" to Feed.MyNiches, "FikFap|dance" to Feed.FikFapTag("dance"), "FikFap|beach" to Feed.FikFapTag("beach"),
+                "SexCom" to Feed.SexSearch(""), "EroMe|@Some.One" to Feed.EromeUser("Some.One"), "FourChan" to Feed.ChanThreads("")),
+            page(1).map { it.key to it.feed })
+        assertEquals(listOf("FikFap|night", "FikFap|dance"), page(2).filter { it.feed.source == OnlineSource.FikFap }.map { it.key })
+        assertEquals(listOf("FikFap|beach", "FikFap|night"), page(3).filter { it.feed.source == OnlineSource.FikFap }.map { it.key })
+        // Each list has its own name in the cursor, so each keeps its own place.
+        assertEquals(page(1).size, page(1).map { it.key }.toSet().size)
+        // Typing something searches every site; what you follow plays no part then.
+        assertEquals(listOf("FikFap"), AllSites.feeds("sun", false, false, false, follows).filter { it.feed.source == OnlineSource.FikFap }.map { it.key })
     }
 
     @Test fun allSitesRemembersEachSitesPlace() {

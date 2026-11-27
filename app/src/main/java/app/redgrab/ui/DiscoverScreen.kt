@@ -128,6 +128,7 @@ fun DiscoverScreen(vm: MainViewModel, onSignIn: () -> Unit, onOpenSettings: () -
             if (source == OnlineSource.RedGifs) vm.loadFollowedNiches()
             if (source == OnlineSource.RedGifs || source == OnlineSource.All) vm.ensureSearchIndex()
             if (source == OnlineSource.Reddit) vm.loadSubreddits()
+            if (source == OnlineSource.FourChan) vm.loadChanBoards()
             if (d.items.isEmpty() && !d.loading && d.error == null) vm.loadMoreDiscover()
         }
     }
@@ -230,7 +231,13 @@ fun DiscoverScreen(vm: MainViewModel, onSignIn: () -> Unit, onOpenSettings: () -
         }
         val shortcuts = remember(source, d.subs, vm.recents, vm.redditUser) {
             val mine = if (source == OnlineSource.Reddit && vm.redditUser != null) listOf(Feed.RedditSaved, Feed.RedditUpvoted) else emptyList()
-            val recent = if (source == OnlineSource.RedGifs) listOf(Feed.MyNiches, Feed.ForYou, Feed.Search("")) else vm.recents.map { Feed.fromQuery(source, it) }
+            val recent = when (source) {
+                OnlineSource.RedGifs -> listOf(Feed.MyNiches, Feed.ForYou, Feed.Search(""))
+                // What these sites list by themselves, then what you opened recently.
+                OnlineSource.EroMe -> listOf(Feed.EromeExplore(false), Feed.EromeExplore(true)) + vm.recents.map { Feed.fromQuery(source, it) }
+                OnlineSource.SexCom -> listOf(Feed.SexSearch("")) + vm.recents.map { Feed.fromQuery(source, it) }
+                else -> vm.recents.map { Feed.fromQuery(source, it) }
+            }
             (mine + recent + d.subs.map { Feed.Subreddit(it) }).distinctBy { it.title.lowercase() }.filter { !it.needsQuery }
         }
         Box(Modifier.padding(pad).fillMaxSize()) {
@@ -250,7 +257,7 @@ fun DiscoverScreen(vm: MainViewModel, onSignIn: () -> Unit, onOpenSettings: () -
                     OnlineSource.FikFap -> "Hashtag, or @user"
                     OnlineSource.SexCom -> "Search GIFs"
                     OnlineSource.EroMe -> "Search, or @user"
-                    OnlineSource.FourChan -> "Search /gif/ threads"
+                    OnlineSource.FourChan -> "Search /${(d.feed as? Feed.ChanThreads)?.board ?: "gif"}/ threads"
                 }
                 BarSearchField(query, { query = it; vm.suggest(it) }, hint, modifier = head, leadingIcon = true,
                     onSearch = { keyboard?.hide(); vm.suggest(""); vm.openFeed(vm.feedFor(source, query)) })
@@ -280,6 +287,42 @@ fun DiscoverScreen(vm: MainViewModel, onSignIn: () -> Unit, onOpenSettings: () -
                                 AssistChip(onClick = vm::openNicheBrowser, label = { Text("Browse niches") }, leadingIcon = { Icon(Icons.Default.Search, null, Modifier.size(16.dp)) })
                             }
                         }
+                    }
+                }
+            }
+            // 4chan's boards (the ones that aren't "work safe"): one tap opens a board's threads.
+            if (source == OnlineSource.FourChan && vm.chanBoards.any { it.adult }) {
+                item(span = StaggeredGridItemSpan.FullLine) {
+                    CompactTouch {
+                        LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp), contentPadding = PaddingValues(horizontal = m.head), verticalAlignment = Alignment.CenterVertically) {
+                            item(key = "boards-label") { Text("Boards", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary) }
+                            items(vm.chanBoards.filter { it.adult }, key = { "b" + it.name }) { b ->
+                                FilterChip((d.feed as? Feed.ChanThreads)?.board == b.name, { vm.openFeed(Feed.ChanThreads("", b.name)) }, { Text("/${b.name}/ ${b.title}", maxLines = 1) })
+                            }
+                        }
+                    }
+                }
+            }
+            // What you follow on a site without following of its own (kept in the app); also part of All sites.
+            if (source != OnlineSource.RedGifs && source != OnlineSource.All && vm.siteFollows[source].orEmpty().isNotEmpty()) {
+                item(span = StaggeredGridItemSpan.FullLine) {
+                    CompactTouch {
+                        LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp), contentPadding = PaddingValues(horizontal = m.head), verticalAlignment = Alignment.CenterVertically) {
+                            item(key = "site-follows-label") { Text("Following", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary) }
+                            items(vm.siteFollows[source].orEmpty(), key = { "sf$it" }) { q ->
+                                FilterChip(d.feed.query.equals(q, ignoreCase = true), { vm.openFeed(vm.feedFor(source, q)) }, { Text(q, maxLines = 1) })
+                            }
+                        }
+                    }
+                }
+            }
+            if (source != OnlineSource.RedGifs && source != OnlineSource.All && source != OnlineSource.Reddit && d.feed.query.isNotBlank()) {
+                item(span = StaggeredGridItemSpan.FullLine) {
+                    Row(head, verticalAlignment = Alignment.CenterVertically) {
+                        Text(d.feed.title, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f),
+                            maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        if (vm.followsOn(source, d.feed.query)) androidx.compose.material3.OutlinedButton(onClick = { vm.toggleSiteFollow(source, d.feed.query) }) { Text("Following") }
+                        else androidx.compose.material3.FilledTonalButton(onClick = { vm.toggleSiteFollow(source, d.feed.query) }) { Text("Follow") }
                     }
                 }
             }
