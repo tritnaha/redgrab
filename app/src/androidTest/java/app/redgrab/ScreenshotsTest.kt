@@ -182,8 +182,18 @@ class ScreenshotsTest {
         ActivityScenario.launch(MainActivity::class.java).use { scenario ->
             lateinit var vm: MainViewModel
             scenario.onActivity { vm = ViewModelProvider(it)[MainViewModel::class.java] }
-            // An emulator without acceleration can take a minute to draw the first screen.
-            check(device.wait(Until.hasObject(By.text("Browse")), 240_000)) { "the app's first screen didn't come up" }
+            // A busy emulator can take a while to draw the first screen, and may put one of its own dialogs
+            // ("... isn't responding") on top: that one is answered with "Wait".
+            var up = false
+            for (attempt in 1..12) {
+                if (device.wait(Until.hasObject(By.text("Browse")), 10_000)) { up = true; break }
+                device.findObject(By.text("Wait"))?.click()
+            }
+            check(up) {
+                // What is on screen instead, so a failure says why.
+                val texts = device.findObjects(By.clazz("android.widget.TextView")).mapNotNull { runCatching { it.text }.getOrNull() }.filter { it.isNotBlank() }.take(12)
+                "the app's first screen didn't come up; in front: ${device.currentPackageName}, showing $texts"
+            }
             block(scenario, vm, mine)
         }
     }
@@ -212,6 +222,17 @@ class ScreenshotsTest {
         tab("Online")
         await("For you")
         shot("v13-online")
+    }
+
+    /** Suggestions under the search box: tags and niches that exist, from the lists kept on the phone. */
+    @Test fun search() = withApp { scenario, vm, mine ->
+        scenario.onActivity { vm.changeSource(OnlineSource.RedGifs); vm.showOnline(feed(mine)) }
+        tab("Online")
+        await("For you")
+        Thread.sleep(3000)
+        scenario.onActivity { vm.showOnline(feed(mine)); vm.suggest("sun") }
+        await("Sunset")
+        shot("v13-search")
     }
 
     /** A clip opened over the grid. */

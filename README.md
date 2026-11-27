@@ -70,11 +70,11 @@ A content filter (straight, lesbian, gay, trans, bisexual, animated) applies to 
 3. Choose a save folder in Settings.
 4. Sign in to RedGifs under Settings → Account. You sign in on the site's own page inside the app.
 
-Requires Android 8.0 or later.
+Requires Android 16 or later.
 
 Later versions install over earlier ones as long as they come from Releases. Android refuses a build signed with a different key.
 
-The app looks for new releases by itself. That works without setup only while this repository is public; for a private repository, enter a read-only GitHub token under Settings → Troubleshooting.
+The app looks for new releases by itself (when opened, and every six hours in the background).
 
 ### Reddit
 
@@ -109,7 +109,7 @@ Needs JDK 17 or later and the Android SDK (platform 37).
 - The APK lands in `app/build/outputs/apk/`.
 - A release build is signed with `signing/release.keystore` if that file exists, otherwise with the local debug key. The key is not in the repository.
 - `-PsideBySide` builds a separate "RedGrab test" app that installs next to the normal one.
-- `-Pshrink` removes unused code and resources from a release build (about 3.6 MB instead of 18 MB). Off by default; names are not obfuscated.
+- Release builds leave out unused code and resources (about 6.5 MB instead of 18 MB); names are not obfuscated. `-PnoShrink` builds it whole.
 
 ### Tests
 
@@ -157,7 +157,8 @@ adb pull /sdcard/Android/data/app.redgrab/files/shots screenshots
 
 Pushing a new `versionName` in `app/build.gradle.kts` runs `.github/workflows/release.yml`, which builds, signs and publishes `v<version>`. The jobs are split so the signing key (build) and the right to publish (publish) never share a job with third-party actions (the emulator tests).
 
-- Needs the repository secret `SIGNING_KEYSTORE_B64` (the keystore, base64-encoded). Optional: `SIGNING_STORE_PASSWORD`, `SIGNING_KEY_PASSWORD`, `SIGNING_KEY_ALIAS`.
+- Needs the repository secret `SIGNING_KEYSTORE_B64` (the keystore, base64-encoded), and `SIGNING_STORE_PASSWORD` and `SIGNING_KEY_PASSWORD` unless the key uses the Android tools' standard password. Optional: `SIGNING_KEY_ALIAS`.
+- Workflow actions are pinned to commits. A brief for an outside security review is in [`docs/SECURITY_AUDIT_BRIEF.md`](docs/SECURITY_AUDIT_BRIEF.md).
 - The emulator runs Android 16; older versions are not tested.
 - Release notes come from the version's section in [`CHANGELOG.md`](CHANGELOG.md). The build fails if the current version has no entry.
 - Before publishing, the last release is installed on an emulator and updated to the new build; the app has to start. The on-device tests run beside it.

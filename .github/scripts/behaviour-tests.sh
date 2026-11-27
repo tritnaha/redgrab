@@ -13,9 +13,18 @@ adb uninstall "$PKG" > /dev/null 2>&1 || true
 adb uninstall "$PKG.test" > /dev/null 2>&1 || true
 adb install -g "$APP" > /dev/null
 adb install -g "$TESTS" > /dev/null
-# A freshly booted emulator is still busy for a while; a test process started into that can be killed.
+# A freshly booted emulator is still busy for a while: a test process started into that can be killed,
+# and the system can put "... isn't responding" dialogs over the app. Wait for the home screen, keep
+# such dialogs away, and start from a clear screen.
+adb shell settings put global hide_error_dialogs 1 > /dev/null 2>&1 || true
 adb shell wm dismiss-keyguard > /dev/null 2>&1 || true
-sleep 15
+for i in $(seq 1 30); do
+  adb shell dumpsys activity activities 2> /dev/null | grep -qE "(mResumedActivity|topResumedActivity|ResumedActivity).*(auncher|home)" && break
+  sleep 3
+done
+adb shell input keyevent KEYCODE_HOME > /dev/null 2>&1 || true
+sleep 10
+echo "In front before the tests: $(adb shell dumpsys activity activities 2> /dev/null | grep -m1 -E 'topResumedActivity|mResumedActivity' | tr -d '\r')"
 
 run() {
   adb logcat -c
@@ -30,14 +39,23 @@ why() {
   adb logcat -d | grep -E "AndroidRuntime|TestRunner|ActivityManager.*($PKG|Process .* has died|Killing)|lowmemorykiller|am_crash|$PKG.*(died|crash)" | tail -60
 }
 
-if run; then exit 0; fi
+# The pictures the tests took (the README's screenshots), fetched whether the tests passed or not.
+shots() {
+  rm -rf shots && mkdir -p shots
+  adb exec-out run-as "$PKG" sh -c "cd /sdcard/Android/data/$PKG/files 2>/dev/null && tar cf - shots" 2> /dev/null | tar xf - 2> /dev/null || true
+  if [ -z "$(ls shots 2> /dev/null)" ]; then adb root > /dev/null 2>&1; sleep 3; adb pull "/sdcard/Android/data/$PKG/files/shots" . > /dev/null 2>&1 || true; fi
+  echo "Screenshots fetched: $(ls shots 2> /dev/null | tr '\n' ' ')"
+}
+
+if run; then shots; exit 0; fi
 why
 # The process going away before a single test ran is the emulator, not the tests: once more.
 if grep -q "Process crashed" instrument.log && ! grep -q "^Tests run\|^Time:" instrument.log; then
   echo "The test process ended before any test ran; trying once more."
   sleep 20
-  if run; then exit 0; fi
+  if run; then shots; exit 0; fi
   why
 fi
+shots
 echo "::error::On-device tests failed"
 exit 1

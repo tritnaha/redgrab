@@ -948,9 +948,7 @@ class Library(private val ctx: Context) {
             r.setDataSource(ctx, video)
             val durMs = r.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0
             val at = (durMs * 1000 / 4).coerceAtMost(2_000_000) // a quarter in, at most 2 s
-            val bmp = (if (android.os.Build.VERSION.SDK_INT >= 27)
-                r.getScaledFrameAtTime(at, android.media.MediaMetadataRetriever.OPTION_CLOSEST_SYNC, 480, 480)
-            else r.getFrameAtTime(at)) ?: return@runCatching false
+            val bmp = r.getScaledFrameAtTime(at, android.media.MediaMetadataRetriever.OPTION_CLOSEST_SYNC, 480, 480) ?: return@runCatching false
             val tmp = File(thumbFile(id).path + ".tmp")
             tmp.outputStream().use { bmp.compress(android.graphics.Bitmap.CompressFormat.JPEG, 82, it) }
             bmp.recycle()

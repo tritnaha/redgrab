@@ -6,6 +6,14 @@ time it opens after an update, and the whole list under Settings → About → W
 Each version has the sections it needs out of Added, Changed and Fixed, one line per change,
 and a link to the code that made it.
 
+## 13.13 (build 26) · 2026-11-27
+
+### Changed
+- The app is 6.5 MB instead of 18 MB: code and pictures it never uses (most of an icon library) are left out of the build.
+- Needs Android 16 or later. Code for older versions is removed.
+- Answers from sites are limited in size (16 MB of text, 4 GB per stream), so a broken site can't fill memory or storage.
+- Release builds: every workflow action is pinned to an exact commit; the signing key's password can be a secret.
+
 ## 13.12 (build 25) · 2026-11-27
 
 ### Added
@@ -25,6 +33,8 @@ and a link to the code that made it.
 ### Fixed
 - A deleted clip no longer shows as an unfinished download: the empty file a download attempt left behind is removed.
 - Release checks: the on-device tests no longer wait behind Android's notification question, and run on Android 16.
+
+[Details](https://github.com/tritnaha/redgrab/commit/5ac835a)
 
 ## 13.11 (build 24) · 2026-11-27
 

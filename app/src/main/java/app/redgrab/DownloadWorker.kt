@@ -612,8 +612,7 @@ class DownloadWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(c
             .setSilent(true)
             .setProgress(p.queued.coerceAtLeast(1), p.done, p.queued == 0)
             .build()
-        return if (Build.VERSION.SDK_INT >= 29) ForegroundInfo(NOTIF_ID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
-        else ForegroundInfo(NOTIF_ID, n)
+        return ForegroundInfo(NOTIF_ID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
     }
 
     private fun notifyDone(msg: String) = runCatching {

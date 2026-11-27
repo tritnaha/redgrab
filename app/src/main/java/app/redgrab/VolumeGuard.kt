@@ -24,13 +24,9 @@ object VolumeGuard {
     /** True when media audio is currently routed to the phone's own loudspeaker. */
     fun onPhoneSpeaker(ctx: Context): Boolean {
         val am = ctx.getSystemService(AudioManager::class.java) ?: return false
-        return if (Build.VERSION.SDK_INT >= 33) {
-            val attrs = AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA).build()
-            val route = am.getAudioDevicesForAttributes(attrs)
-            route.any { it.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER } && route.none { it.type in external }
-        } else {
-            am.getDevices(AudioManager.GET_DEVICES_OUTPUTS).none { it.type in external }
-        }
+        val attrs = AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA).build()
+        val route = am.getAudioDevicesForAttributes(attrs)
+        return route.any { it.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER } && route.none { it.type in external }
     }
 
     /**
