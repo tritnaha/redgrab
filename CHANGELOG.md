@@ -6,6 +6,26 @@ time it opens after an update, and the whole list under Settings → About → W
 Each version has the sections it needs out of Added, Changed and Fixed, one line per change,
 and a link to the code that made it.
 
+## 13.12 (build 25) · 2026-11-27
+
+### Added
+- "What do you want to see?" is asked once: on first use, or the first time after this update. Change it later in Settings → Online.
+- The download cloud opens the queue: every clip waiting to be saved, each with a button to take it out, plus "Clear all".
+- A clip RedGifs has deleted is also taken out of your RedGifs collections (Settings → Sync), so it stops coming back.
+
+### Changed
+- A clip listed without any video address is looked up on RedGifs first; if it is deleted it goes to Removed instead of Failed.
+- Locked: the app is covered from the first frame, and no dialog (crash report, update, what's new) opens over the lock.
+- The activity log is no longer copied to Android's system log. A copied log or report also drops your sign-ins and Reddit name.
+- Updates: only this repository's release files are fetched, and a download must be newer and signed like the installed app.
+- Sign-in pages show the address of the page on show.
+- The GitHub token field is treated as a password by the keyboard.
+- Release builds: the signing key and the right to publish are kept apart from outside code; the key's passwords can be secrets.
+
+### Fixed
+- A deleted clip no longer shows as an unfinished download: the empty file a download attempt left behind is removed.
+- Release checks: the on-device tests no longer wait behind Android's notification question, and run on Android 16.
+
 ## 13.11 (build 24) · 2026-11-27
 
 ### Added
@@ -23,11 +43,12 @@ and a link to the code that made it.
 - A tag you tap or follow is asked for exactly. Before, it went through the text search, which also returns similar words.
 - Background sync is on by default (every 12 hours, Wi-Fi unless mobile data is allowed) and keeps the list up to date even with no collection chosen for download.
 - A build can carry a Reddit client ID, so Reddit works without entering one.
-
 - The update check says so when the repository is private (GitHub then answers "not found" without a token).
 
 ### Fixed
 - An unreliable unit test (stream sizes) that could fail a release build.
+
+[Details](https://github.com/tritnaha/redgrab/commit/396b2ae)
 
 ## 13.10 (build 23) · 2026-11-27
 

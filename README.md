@@ -6,7 +6,7 @@ Personal project. Adult content. Not affiliated with any of the sites.
 
 ## Screenshots
 
-Version 13.6 on an emulator, with made-up clips. The thumbnails are drawn by the screenshot test; nothing in them comes from any site.
+Taken on an emulator with made-up clips. The thumbnails are drawn by the screenshot test; nothing in them comes from any site.
 
 <p>
   <img src="screenshots/v13-saved.png" alt="Saved tab" width="230">
@@ -25,7 +25,8 @@ Version 13.6 on an emulator, with made-up clips. The thumbnails are drawn by the
 
 **Library**
 - Syncs your RedGifs likes and collections; downloads in HD, falls back to SD
-- Resumes interrupted downloads; retries failures; skips clips the site has deleted
+- Resumes interrupted downloads; retries failures; skips clips the site has deleted and takes them out of your RedGifs collections
+- Download queue: save all, clear all, or take single clips out
 - Quick sync (only what is new), full sync weekly or on demand
 - Background sync every 12 hours by default; downloads new clips of chosen collections; mobile data only if you allow it
 - Filter by tag, creator, niche, your own categories, length, orientation, sound
@@ -89,6 +90,7 @@ Reddit needs a client ID, unless the build carries one (`-PredditClientId=…`, 
 - Nothing is backed up to the cloud or copied to a new device.
 - No analytics, no ads, no servers of its own. The app talks only to the sites you browse and to GitHub for updates.
 - Notifications never name a site or a clip and stay off the lock screen.
+- The activity log stays inside the app; copies and reports have sign-ins removed.
 - Saved clips are ordinary files in the folder you choose. The app lock covers the app, not that folder.
 - The built-in browser's cookies are stored like any browser's and are removed when you sign out.
 
@@ -152,11 +154,12 @@ adb pull /sdcard/Android/data/app.redgrab/files/shots screenshots
 
 ### Releases
 
-Pushing a new `versionName` in `app/build.gradle.kts` runs `.github/workflows/release.yml`, which builds, signs and publishes `v<version>`.
+Pushing a new `versionName` in `app/build.gradle.kts` runs `.github/workflows/release.yml`, which builds, signs and publishes `v<version>`. The jobs are split so the signing key (build) and the right to publish (publish) never share a job with third-party actions (the emulator tests).
 
-- Needs the repository secret `SIGNING_KEYSTORE_B64` (the keystore, base64-encoded).
+- Needs the repository secret `SIGNING_KEYSTORE_B64` (the keystore, base64-encoded). Optional: `SIGNING_STORE_PASSWORD`, `SIGNING_KEY_PASSWORD`, `SIGNING_KEY_ALIAS`.
+- The emulator runs Android 16; older versions are not tested.
 - Release notes come from the version's section in [`CHANGELOG.md`](CHANGELOG.md). The build fails if the current version has no entry.
-- Before publishing, the last release is installed on an emulator and updated to the new build; the app has to start.
+- Before publishing, the last release is installed on an emulator and updated to the new build; the app has to start. The on-device tests run beside it.
 - After publishing, the release before is installed on an emulator and has to update itself through the app's own updater. "Run workflow" with `updater` ticked runs only that.
 
 ## Project layout
