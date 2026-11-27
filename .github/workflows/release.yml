@@ -3,6 +3,11 @@
 #
 # Needs one repository secret, SIGNING_KEYSTORE_B64: the signing key file, base64-encoded. Every
 # release must be signed with the same key, or Android refuses to install it over the last one.
+#
+# Before publishing, the build is run on an emulator (GitHub's Linux runners have hardware
+# acceleration for it): the last release is installed and updated to this build, and the app has
+# to start. See .github/scripts/upgrade-smoke.sh. "Run workflow" with "smoke" ticked does the
+# build and that test without publishing anything.
 name: Release
 
 on:
@@ -10,6 +15,11 @@ on:
     branches: [main, online-sources]
     paths: ['app/build.gradle.kts', '.github/workflows/release.yml']
   workflow_dispatch:
+    inputs:
+      smoke:
+        description: Build and run the emulator test even if this version is already published (publishes nothing new)
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -21,7 +31,7 @@ concurrency:
 jobs:
   release:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 50
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
@@ -37,11 +47,14 @@ jobs:
           test -n "$name" && test -n "$build"
           echo "name=$name" >> "$GITHUB_OUTPUT"
           echo "build=$build" >> "$GITHUB_OUTPUT"
-          if gh release view "v$name" > /dev/null 2>&1; then echo "published=true" >> "$GITHUB_OUTPUT"; else echo "published=false" >> "$GITHUB_OUTPUT"; fi
-          echo "Version $name (build $build)"
+          if gh release view "v$name" > /dev/null 2>&1; then published=true; else published=false; fi
+          echo "published=$published" >> "$GITHUB_OUTPUT"
+          # Build and test when there is something to publish, or when asked to just test.
+          if [ "$published" = false ] || [ "${{ inputs.smoke }}" = "true" ]; then echo "work=true" >> "$GITHUB_OUTPUT"; else echo "work=false" >> "$GITHUB_OUTPUT"; fi
+          echo "Version $name (build $build), published: $published"
 
       - name: Signing key
-        if: steps.version.outputs.published == 'false'
+        if: steps.version.outputs.work == 'true'
         env:
           KEY: ${{ secrets.SIGNING_KEYSTORE_B64 }}
         run: |
@@ -53,16 +66,40 @@ jobs:
           echo "$KEY" | base64 -d > signing/release.keystore
 
       - uses: actions/setup-java@v4
-        if: steps.version.outputs.published == 'false'
+        if: steps.version.outputs.work == 'true'
         with:
           distribution: temurin
           java-version: '21'
 
       - name: Build
-        if: steps.version.outputs.published == 'false'
+        if: steps.version.outputs.work == 'true'
         run: |
           echo "sdk.dir=$ANDROID_HOME" > local.properties
           ./gradlew --no-daemon testDebugUnitTest assembleRelease
+
+      - name: Allow the emulator to use hardware acceleration
+        if: steps.version.outputs.work == 'true'
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      # The release must survive being installed over the last one. The behaviour tests (place kept across
+      # tabs, Back, the grid following the clip view, the screens opening) run too but don't block yet.
+      - name: Update test on an emulator
+        if: steps.version.outputs.work == 'true'
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          arch: x86_64
+          target: default
+          profile: pixel_6
+          disable-animations: true
+          emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
+          script: |
+            bash .github/scripts/upgrade-smoke.sh app/build/outputs/apk/release/app-release.apk
+            adb uninstall app.redgrab || true
+            ./gradlew --no-daemon connectedDebugAndroidTest || echo "::warning::Behaviour tests failed (they don't block the release yet)"
 
       - name: Publish
         if: steps.version.outputs.published == 'false'
