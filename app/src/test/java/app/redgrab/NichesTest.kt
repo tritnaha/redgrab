@@ -165,4 +165,90 @@ class NichesTest {
         assertEquals(listOf("n:a" to 1, "n:b" to 1, "t:sunset" to 1), NicheMix.plan(1, keys))
         assertEquals(listOf("n:a" to 2, "n:b" to 2, "t:sunset" to 2), NicheMix.plan(2, keys))
     }
+
+    // ---- quick and full sync -------------------------------------------------------------
+
+    private fun liked(id: String) = Clip(id = id, hd = "https://x/$id.mp4", sd = null, thumb = null, duration = 5.0, width = 1, height = 1, hasAudio = false,
+        user = "", created = 0, sources = setOf("Liked"))
+
+    @Test fun aFullSyncRunsWhenAskedNeverDoneOrAWeekOld() {
+        val now = 1_800_000_000_000L
+        val day = 86_400_000L
+        assertTrue(SyncPlan.needsFull(asked = true, lastFull = now - day, now = now, knownClips = 50))
+        assertTrue(SyncPlan.needsFull(false, 0, now, 50))             // never done
+        assertTrue(SyncPlan.needsFull(false, now - day, now, 0))      // nothing on the phone yet
+        assertTrue(SyncPlan.needsFull(false, now - 8 * day, now, 50)) // a week old
+        assertTrue(SyncPlan.needsFull(false, now + day, now, 50))     // the clock went back
+        assertFalse(SyncPlan.needsFull(false, now - 2 * day, now, 50))
+    }
+
+    @Test fun aQuickSyncAddsNewLikesAndNoticesWhenTheCountDoesNotAddUp() {
+        val known = listOf(liked("c"), liked("b"), liked("a"))
+        // Two new likes on top, and the site's total grew by two: they go in front, the rest stays.
+        assertEquals(listOf("e", "d", "c", "b", "a"), SyncPlan.mergeLikes(known, listOf(liked("e"), liked("d"), liked("c")), siteTotal = 5, lastSiteTotal = 3)!!.map { it.id })
+        // Nothing new and the same total: unchanged.
+        assertEquals(listOf("c", "b", "a"), SyncPlan.mergeLikes(known, listOf(liked("c"), liked("b")), 3, 3)!!.map { it.id })
+        // One new like but the total only says "same as before": something was unliked. Read everything.
+        assertNull(SyncPlan.mergeLikes(known, listOf(liked("d"), liked("c")), 3, 3))
+        // The total dropped: read everything.
+        assertNull(SyncPlan.mergeLikes(known, listOf(liked("c"), liked("b")), 2, 3))
+        // No total remembered from before: can't be checked, read everything.
+        assertNull(SyncPlan.mergeLikes(known, listOf(liked("c")), 3, 0))
+    }
+
+    @Test fun aCollectionIsReadAgainOnlyWhenItsSizeOnTheSiteChanged() {
+        assertTrue(SyncPlan.collectionUnchanged(siteCount = 12, countAtLastRead = 12, knownMembers = 11))
+        assertFalse(SyncPlan.collectionUnchanged(13, 12, 11))   // a clip was added
+        assertFalse(SyncPlan.collectionUnchanged(12, null, 0))  // never read
+        assertFalse(SyncPlan.collectionUnchanged(12, 12, 0))    // read, but nothing of it is on the phone
+        assertTrue(SyncPlan.collectionUnchanged(0, 0, 0))       // empty then and now
+    }
+
+    @Test fun likesAreReadFromTheTopOnlyUntilAPageHoldsNothingNew() = runBlocking {
+        fun gif(id: String) = """{"id":"$id","urls":{"hd":"https://media.redgifs.com/$id.mp4","sd":"https://media.redgifs.com/$id-mobile.mp4"},"duration":5,"width":10,"height":20}"""
+        val pages = listOf(listOf("n1", "k1"), listOf("k2", "k3"), listOf("k4", "k5"))
+        val fake = Fake { req ->
+            val p = req.url.queryParameter("page")!!.toInt()
+            200 to """{"page":$p,"pages":3,"total":6,"gifs":[${pages[p - 1].joinToString(",") { gif(it) }}]}"""
+        }
+        val known = setOf("k1", "k2", "k3", "k4", "k5")
+        var total = 0
+        val quick = fake.api().likedClips(FeedExtras(), known) { _, _, t -> total = t }
+        // Page 1 had something new, page 2 nothing: stop there. Page 3 is never asked for.
+        assertEquals(listOf("1", "2"), fake.seen.map { it.url.queryParameter("page") })
+        assertEquals(listOf("n1", "k1", "k2", "k3"), quick.map { it.id })
+        assertEquals(6, total)
+        // A full read asks for every page.
+        fake.seen.clear()
+        assertEquals(6, fake.api().likedClips(FeedExtras()) { _, _, _ -> }.size)
+        assertEquals(listOf("1", "2", "3"), fake.seen.map { it.url.queryParameter("page") })
+    }
+
+    // ---- all sites ------------------------------------------------------------------------
+
+    @Test fun allSitesAsksEachSiteThatCanAnswer() {
+        // Nothing typed: only sites that have a feed without a search, and only those that are set up.
+        assertEquals(listOf(Feed.MyNiches, Feed.RedditHome, Feed.ChanThreads("")), AllSites.feeds("", redGifs = true, reddit = true, personal = true))
+        assertEquals(listOf(Feed.Search(""), Feed.ChanThreads("")), AllSites.feeds("", redGifs = true, reddit = false, personal = false))
+        assertEquals(listOf(Feed.ChanThreads("")), AllSites.feeds(" ", redGifs = false, reddit = false, personal = false))
+        // Something typed: every site is searched for it, each in its own way.
+        assertEquals(
+            listOf(Feed.Search("night sky"), Feed.Subreddit("nightsky"), Feed.FikFapTag("nightsky"), Feed.SexSearch("night sky"), Feed.EromeSearch("night sky"), Feed.ChanThreads("night sky")),
+            AllSites.feeds("night sky", redGifs = true, reddit = true, personal = true))
+        // No feed of "All sites" is itself "All sites".
+        assertTrue(AllSites.feeds("x", true, true, true).none { it.source == OnlineSource.All })
+        assertEquals(Feed.AllSites("x"), Feed.fromQuery(OnlineSource.All, " x "))
+        assertEquals(Feed.AllSites(""), Feed.home(OnlineSource.All))
+    }
+
+    @Test fun allSitesRemembersEachSitesPlace() {
+        val place = AllSites.Place(mapOf("Reddit" to "t3_abc", "EroMe" to "2|a,b"), setOf("SexCom"))
+        assertEquals(place, AllSites.decode(AllSites.encode(place)))
+        assertEquals(AllSites.Place(), AllSites.decode(null))
+        assertEquals(AllSites.Place(), AllSites.decode("not json"))
+        // "All sites" is never where a clip is from.
+        assertEquals(OnlineSource.RedGifs, OnlineSource.of("allthings"))
+        assertFalse(OnlineSource.All in OnlineSource.SITES)
+        assertFalse("All sites" in OnlineSource.SAVED_LABELS)
+    }
 }

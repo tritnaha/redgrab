@@ -6,6 +6,17 @@ time it opens after an update, and the whole list under Settings → About → W
 Each version has the sections it needs out of Added, Changed and Fixed, one line per change,
 and a link to the code that made it.
 
+## 13.10 (build 23) · 2026-11-27
+
+### Added
+- "All sites" in the Online tab: one feed with a few clips from each site you have set up, in turn, and one search box that asks all of them.
+- Typing on Reddit (or in All sites) suggests matching subreddits.
+- Settings → Sync → "Full sync" reads everything again when you want it to.
+
+### Changed
+- Syncing is quick: it fetches new likes from the top and reads a collection again only when its size on RedGifs changed. Everything is read again once a week.
+- The save folder is no longer listed at every start (at most every twelve hours, and in a full sync).
+
 ## 13.9 (build 22) · 2026-11-27
 
 ### Added
@@ -28,6 +39,8 @@ and a link to the code that made it.
 - The Online tab had no way to switch SFW mode off.
 - "N to save" counted clips that were deleted on their site, and they stayed in the download queue.
 - The Saved grid returns to where it was when the app was last closed.
+
+[Details](https://github.com/tritnaha/redgrab/commit/b85c9fa)
 
 ## 13.8 (build 21) · 2026-11-27
 

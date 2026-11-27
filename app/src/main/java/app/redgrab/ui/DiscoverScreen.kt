@@ -116,6 +116,7 @@ fun DiscoverScreen(vm: MainViewModel, onSignIn: () -> Unit, onOpenSettings: () -
     val home = d.feed == vm.homeFeed(source)
     // What each site needs before anything can load: RedGifs a sign-in, Reddit a client ID.
     val ready = when (source) {
+        OnlineSource.All -> true
         OnlineSource.RedGifs -> vm.signedIn
         OnlineSource.Reddit -> vm.redditClientId.isNotBlank()
         else -> true
@@ -272,6 +273,7 @@ fun DiscoverScreen(vm: MainViewModel, onSignIn: () -> Unit, onOpenSettings: () -
         ) {
             item(span = StaggeredGridItemSpan.FullLine) {
                 val hint = when (source) {
+                    OnlineSource.All -> "Search all sites"
                     OnlineSource.RedGifs -> "Search RedGifs (tags, words)…"
                     OnlineSource.Reddit -> "Subreddit, or u/name"
                     OnlineSource.FikFap -> "Hashtag, or @user"
@@ -283,7 +285,21 @@ fun DiscoverScreen(vm: MainViewModel, onSignIn: () -> Unit, onOpenSettings: () -
                     onSearch = { keyboard?.hide(); vm.suggest(""); vm.openFeed(Feed.fromQuery(source, query)) })
             }
             // While typing on RedGifs: tags and niches that match.
-            if (source == OnlineSource.RedGifs && (vm.tagSuggestions.isNotEmpty() || vm.nicheSuggestions.isNotEmpty())) {
+            // Subreddits matching what is typed (on Reddit and in All sites).
+            if (vm.subSuggestions.isNotEmpty() && (source == OnlineSource.Reddit || source == OnlineSource.All)) {
+                item(span = StaggeredGridItemSpan.FullLine) {
+                    CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides 40.dp) {
+                        LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp), contentPadding = PaddingValues(horizontal = m.head), verticalAlignment = Alignment.CenterVertically) {
+                            item(key = "subs-label") { Text("Subreddits", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary) }
+                            items(vm.subSuggestions, key = { "s" + it.name }) { sub ->
+                                AssistChip(onClick = { keyboard?.hide(); vm.suggest(""); vm.openFeed(Feed.Subreddit(sub.name)) },
+                                    label = { Text("r/${sub.name} · ${Format.count(sub.subscribers)}", maxLines = 1) })
+                            }
+                        }
+                    }
+                }
+            }
+            if ((source == OnlineSource.RedGifs || source == OnlineSource.All) && (vm.tagSuggestions.isNotEmpty() || vm.nicheSuggestions.isNotEmpty())) {
                 item(span = StaggeredGridItemSpan.FullLine) {
                     CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides 40.dp) {
                         // Two rows, each named for what it holds: a niche is a community with its own feed, a tag is a word on clips.

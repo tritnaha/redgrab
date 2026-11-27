@@ -321,6 +321,13 @@ fun SettingsScreen(vm: MainViewModel, onSignIn: () -> Unit, onOpenLog: () -> Uni
                 }
                 ListItem(
                     colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+                    leadingContent = { Icon(Icons.Default.Sync, null) },
+                    headlineContent = { Text("Full sync") },
+                    supportingContent = { Text("A normal sync only fetches what is new. This reads everything again and checks the folder; it also runs by itself once a week.") },
+                    trailingContent = { TextButton(enabled = !s.refreshing, onClick = { vm.refresh(full = true) }) { Text("Sync") } },
+                )
+                ListItem(
+                    colors = ListItemDefaults.colors(containerColor = Color.Transparent),
                     leadingContent = { Icon(Icons.Default.History, null) },
                     headlineContent = { Text("Forget download history") },
                     supportingContent = { Text("RedGrab remembers clips it saved, even if you move or delete the files. Forget this to fetch missing clips again.") },

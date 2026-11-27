@@ -152,6 +152,12 @@ sealed interface Feed {
     /** The site numbers this feed's pages, so any page can be opened directly (others only continue from the last one). */
     val numbered: Boolean get() = false
 
+    /** Every site that is set up, in one feed; with [query], every site searched for it (see AllSites). */
+    data class AllSites(override val query: String) : Feed {
+        override val title get() = if (query.isBlank()) "All sites" else "All sites: $query"
+        override val source get() = OnlineSource.All
+    }
+
     // RedGifs
     /** One feed made from the niches and tags you follow (see NicheMix). */
     data object MyNiches : Feed {
@@ -259,6 +265,7 @@ sealed interface Feed {
     companion object {
         /** What a source shows first. */
         fun home(s: OnlineSource): Feed = when (s) {
+            OnlineSource.All -> AllSites("")
             OnlineSource.RedGifs -> MyNiches
             OnlineSource.Reddit -> RedditHome
             OnlineSource.FikFap -> FikFapTag("")
@@ -275,6 +282,7 @@ sealed interface Feed {
         fun fromQuery(s: OnlineSource, text: String): Feed {
             val t = text.trim()
             return when (s) {
+                OnlineSource.All -> AllSites(t)
                 OnlineSource.RedGifs -> Search(t)
                 OnlineSource.Reddit -> {
                     val path = t.removePrefix("/")
@@ -607,7 +615,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     // ---- sync -----------------------------------------------------------------
 
-    fun refresh(quiet: Boolean = false) {
+    /** Syncs with RedGifs: a quick one that fetches what is new, or with [full] everything again. */
+    fun refresh(quiet: Boolean = false, full: Boolean = false) {
         if (!prefs.signedIn) {
             say("Sign in first (Settings → Account).")
             return
@@ -617,7 +626,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             return
         }
         viewModelScope.launch {
-            library.refresh().also { sessionState = Session.state(prefs); sessionText = Session.describe(prefs) }.onSuccess {
+            library.refresh(full).also { sessionState = Session.state(prefs); sessionText = Session.describe(prefs) }.onSuccess {
                 needsSignIn = false
                 val s = state.value
                 // Auto-sync: anything new in the collections you marked gets downloaded right away.
@@ -1229,15 +1238,26 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         private set
     var nicheSuggestions by mutableStateOf<List<NicheInfo>>(emptyList())
         private set
+    var subSuggestions by mutableStateOf<List<RedditApi.SubInfo>>(emptyList())
+        private set
     private var suggestJob: kotlinx.coroutines.Job? = null
 
     /** Looks up tags and niches matching what has been typed (after a short pause in typing). */
     fun suggest(text: String) {
         suggestJob?.cancel()
         val q = text.trim()
-        if (q.length < 2 || sfw || !prefs.signedIn || discover.feed.source != OnlineSource.RedGifs) { tagSuggestions = emptyList(); nicheSuggestions = emptyList(); return }
+        val site = discover.feed.source
+        val redGifs = (site == OnlineSource.RedGifs || site == OnlineSource.All) && prefs.signedIn
+        val reddit = (site == OnlineSource.Reddit || site == OnlineSource.All) && !prefs.redditClientId.isNullOrBlank()
+        if (q.length < 2 || sfw || (!redGifs && !reddit)) { tagSuggestions = emptyList(); nicheSuggestions = emptyList(); subSuggestions = emptyList(); return }
         suggestJob = viewModelScope.launch {
             kotlinx.coroutines.delay(350)
+            // Reddit's counterpart of a niche is a subreddit.
+            if (reddit) subSuggestions = withContext(Dispatchers.IO) {
+                runCatching { RedditApi(prefs, RedGifsApi.clientFor(getApplication<Application>().userAgent)).searchSubreddits(q) }
+                    .onFailure { AppLog.w("Subreddit search failed: ${it.message}") }.getOrDefault(emptyList()).take(10)
+            } else subSuggestions = emptyList()
+            if (!redGifs) { tagSuggestions = emptyList(); nicheSuggestions = emptyList(); return@launch }
             val (tags, niches) = withContext(Dispatchers.IO) {
                 val t = runCatching { withRedGifs(getApplication()) { it.suggestTags(q) } }.getOrDefault(emptyList())
                 val n = runCatching { withRedGifs(getApplication()) { it.searchNiches(q, null, NicheOrder.Match, 1, count = 10).niches } }.getOrDefault(emptyList())
@@ -1309,6 +1329,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun openPerformerOnline(name: String, source: OnlineSource = OnlineSource.RedGifs) {
         player = null
         openFeed(when (source) {
+            OnlineSource.All -> Feed.AllSites(name)
             OnlineSource.RedGifs -> Feed.Performer(name)
             OnlineSource.Reddit -> Feed.fromQuery(source, "u/$name")
             OnlineSource.FikFap -> Feed.FikFapUser(name)
@@ -1353,7 +1374,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             result.onSuccess { pg ->
                 val seen = discover.items.mapTo(HashSet()) { it.id }
                 // Content preferences: RedGifs clips labelled for an audience you switched off are left out.
-                val wanted = if (source == OnlineSource.RedGifs) pg.clips.filter { ContentPrefs.allows(contentPrefs, it.sexuality) } else pg.clips
+                val wanted = pg.clips.filter { OnlineSource.of(it.id) != OnlineSource.RedGifs || ContentPrefs.allows(contentPrefs, it.sexuality) }
                 val fresh = wanted.filter { it.id !in seen }
                 discover = discover.copy(items = discover.items + fresh, page = next, cursor = pg.cursor,
                     // A page that added nothing isn't a place you can be.
@@ -1421,6 +1442,30 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             is Feed.EromeSearch -> EromeApi(http).search(f.query, d.cursor, next)
             is Feed.EromeUser -> EromeApi(http).user(f.name, d.cursor, next)
             is Feed.ChanThreads -> FourChanApi(http).threads(f.query, d.cursor, next)
+            is Feed.AllSites -> {
+                val place = AllSites.decode(d.cursor)
+                val subs = AllSites.feeds(f.query, redGifs = prefs.signedIn, reddit = !prefs.redditClientId.isNullOrBlank(),
+                    personal = d.niches.isNotEmpty() || followedTags.isNotEmpty() || !d.nichesLoaded).filter { it.source.name !in place.done }
+                val cursors = HashMap(place.cursors)
+                val done = HashSet(place.done)
+                val parts = subs.map { sub ->
+                    val name = sub.source.name
+                    try {
+                        val sd = d.copy(feed = sub, order = if (d.order in sub.orders) d.order else OnlineOrder.Trending, cursor = place.cursors[name])
+                        val pg = try { fetchPage(sd, next) } catch (e: NoNichesException) { fetchPage(sd.copy(feed = Feed.Search("")), next) }
+                        if (pg.cursor != null) cursors[name] = pg.cursor else cursors.remove(name)
+                        if (!pg.hasMore || (pg.clips.isEmpty() && pg.cursor == null)) done += name
+                        pg.clips
+                    } catch (e: kotlinx.coroutines.CancellationException) { throw e }
+                    catch (e: Exception) {
+                        // One site failing (not set up, down, blocked) doesn't stop the others; it sits out the rest of this feed.
+                        AppLog.w("All sites: ${sub.source.label} left out: ${e.message}")
+                        done += name
+                        emptyList()
+                    }
+                }
+                OnlinePage(NicheMix.interleave(parts), next, 0, cursor = AllSites.encode(AllSites.Place(cursors, done)), more = subs.any { it.source.name !in done })
+            }
         }
     }
 
@@ -1591,8 +1636,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** Re-reads the save folder, then tidies it: stale partials out, missing thumbnails in. */
-    private fun rescanFolder() = viewModelScope.launch(Dispatchers.IO) {
-        runCatching { library.rescan() }.onFailure { AppLog.e("Folder scan failed", it) }
+    /**
+     * Housekeeping after the folder may have changed. Listing the whole save folder is slow with
+     * many files, so on an ordinary start ([force] off) it is skipped when it was done in the last
+     * twelve hours: the app's own record of what it saved is used meanwhile.
+     */
+    private fun rescanFolder(force: Boolean = true) = viewModelScope.launch(Dispatchers.IO) {
+        val due = force || System.currentTimeMillis() - prefs.lastFolderScan !in 0..12 * 3_600_000L
+        if (due) runCatching { library.rescan() }.onFailure { AppLog.e("Folder scan failed", it) }
         runCatching { library.cleanPartials() }
         refreshPartialInfo()
         runCatching { library.adoptImported() }
@@ -1671,7 +1722,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         watchNetwork()
         // Housekeeping off the main thread: re-check the folder, drop stale partial downloads,
         // and make sure every saved clip has a thumbnail stored on the phone.
-        rescanFolder()
+        rescanFolder(force = false)
         lookForUpdate()
         // Showing what's new must never be able to stop the app from starting.
         runCatching { greetAfterUpdate() }.onFailure { AppLog.e("What's new couldn't be prepared", it) }

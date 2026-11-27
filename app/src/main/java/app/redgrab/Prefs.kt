@@ -273,6 +273,23 @@ class Prefs(context: Context) : RedditStore {
         get() = sp.getString("followedTags", null)?.split('\n')?.filter { it.isNotBlank() } ?: emptyList()
         set(v) = sp.edit { putString("followedTags", v.map { it.trim().replace('\n', ' ') }.filter { it.isNotEmpty() }.distinctBy { it.lowercase() }.joinToString("\n")) }
 
+    /** When everything was last read from RedGifs (epoch millis); quick syncs in between only fetch what is new. */
+    var lastFullSync: Long
+        get() = sp.getLong("lastFullSync", 0)
+        set(v) = sp.edit { putLong("lastFullSync", v) }
+    /** How many likes RedGifs reported at the last sync. */
+    var likedSiteTotal: Int
+        get() = sp.getInt("likedSiteTotal", 0)
+        set(v) = sp.edit { putInt("likedSiteTotal", v) }
+    /** For each collection, the number of clips RedGifs reported when it was last read. */
+    var collectionCounts: Map<String, Int>
+        get() = runCatching { org.json.JSONObject(sp.getString("collectionCounts", "{}") ?: "{}").let { j -> j.keys().asSequence().associateWith { j.optInt(it) } } }.getOrDefault(emptyMap())
+        set(v) = sp.edit { putString("collectionCounts", org.json.JSONObject(v as Map<*, *>).toString()) }
+    /** When the save folder was last listed. */
+    var lastFolderScan: Long
+        get() = sp.getLong("lastFolderScan", 0)
+        set(v) = sp.edit { putLong("lastFolderScan", v) }
+
     // ---- app lock ----
 
     /** Ask for the phone's own unlock (fingerprint, face, PIN, pattern, password) before showing the app. */

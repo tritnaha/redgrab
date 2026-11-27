@@ -26,7 +26,8 @@ Version 13.6 on an emulator, with made-up clips. The thumbnails are drawn by the
 **Library**
 - Syncs your RedGifs likes and collections; downloads in HD, falls back to SD
 - Resumes interrupted downloads; retries failures; skips clips the site has deleted
-- Background sync for chosen collections (optionally Wi-Fi only)
+- Quick sync (only what is new), full sync weekly or on demand
+- Background sync for chosen collections; mobile data only if you allow it
 - Filter by tag, creator, niche, your own categories, length, orientation, sound
 - Import a folder of existing clips
 - Finds byte-identical duplicates
@@ -35,7 +36,8 @@ Version 13.6 on an emulator, with made-up clips. The thumbnails are drawn by the
 
 | Source | Browse by | Needs |
 | --- | --- | --- |
-| RedGifs | For you, search, niche, creator, related | RedGifs sign-in |
+| All sites | one feed across every site set up, one search | whatever each site needs |
+| RedGifs | My feed (followed niches and tags), For you, search, niche browser, creator, related | RedGifs sign-in |
 | Reddit | front page, subreddit, user, your saved/upvoted | your own client ID |
 | FikFap | hashtag, user | nothing |
 | sex.com | GIF search | nothing |

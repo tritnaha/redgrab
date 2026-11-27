@@ -269,6 +269,17 @@ class ScreenshotsTest {
         check(target in visible) { "the last clip seen ($target) isn't on screen after closing; visible: $visible" }
     }
 
+    /** The combined view opens and takes a search (without a route to the sites it simply finds nothing). */
+    @Test fun allSitesOpens() = withApp { scenario, vm, _ ->
+        scenario.onActivity { vm.changeSource(OnlineSource.All) }
+        tab("Online")
+        await("All sites")
+        scenario.onActivity { vm.openFeed(Feed.AllSites("night sky")) }
+        await("All sites: night sky")
+        Thread.sleep(8000)
+        check(vm.discover.feed == Feed.AllSites("night sky")) { "All sites didn't stay open: ${vm.discover.feed}" }
+    }
+
     @Test fun whatsNew() = withApp { scenario, vm, _ ->
         // What an update shows: the versions that are new to you (here, the last two).
         val recent = vm.changelog.take(2)

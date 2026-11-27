@@ -352,15 +352,16 @@ class Library(private val ctx: Context) {
     // ---- refresh -------------------------------------------------------------
 
     /** Re-reads likes and collections from RedGifs and re-checks the folder. */
-    suspend fun refresh(): Result<Unit> = refreshLock.withLock {
+    /** Syncs with RedGifs. Quick unless [full] is asked for or due (see [SyncPlan]). */
+    suspend fun refresh(full: Boolean = false): Result<Unit> = refreshLock.withLock {
         // A session that has run out, or is about to, is renewed out of sight first.
         if (prefs.signedIn && Session.state(prefs).let { it == Session.State.Expired || it == Session.State.ExpiringSoon }) SessionRenewer.renew(ctx)
-        val first = sync()
+        val first = sync(full)
         // RedGifs turned the session down mid-way (it also does when the network changed): renew once and start over.
-        if (first.exceptionOrNull() is AuthException && SessionRenewer.renew(ctx)) sync() else first
+        if (first.exceptionOrNull() is AuthException && SessionRenewer.renew(ctx)) sync(full) else first
     }
 
-    private suspend fun sync(): Result<Unit> =
+    private suspend fun sync(asked: Boolean): Result<Unit> =
         withContext(Dispatchers.IO) {
             val token = prefs.token
             val ua = prefs.userAgent
@@ -375,25 +376,53 @@ class Library(private val ctx: Context) {
                 }
                 var likedTotal = 0
                 val extras = FeedExtras()
-                api.likedClips(extras) { p, pages, total ->
+                val before0 = synchronized(lock) { raw }
+                val started = System.currentTimeMillis()
+                // Everything, or only what is new? (See SyncPlan.)
+                val full = SyncPlan.needsFull(asked, prefs.lastFullSync, started, before0.size)
+                suspend fun allLikes() = api.likedClips(extras) { p, pages, total ->
                     likedTotal = total
                     status("Reading likes… page $p${if (pages > 0) " of $pages" else ""}")
-                }.forEach(::add)
+                }
+                var likesReadInFull = full
+                val likes = if (full) allLikes() else {
+                    val known = before0.filter { it.liked }.map { it.copy(sources = setOf("Liked"), colIds = emptySet()) }
+                    val top = api.likedClips(extras, known.mapTo(HashSet()) { it.id }) { _, _, total -> likedTotal = total; status("Checking for new likes…") }
+                    // The site's count has to agree with what was found; if not (something was unliked), read them all.
+                    SyncPlan.mergeLikes(known, top, likedTotal, prefs.likedSiteTotal) ?: run { likesReadInFull = true; allLikes() }
+                }
+                likes.forEach(::add)
+                val likedSiteTotal = likedTotal
                 if (likedTotal == 0) likedTotal = merged.size
 
+                var collectionsRead = 0
+                var collectionsTotal = 0
                 if (prefs.includeCollections) {
                     val cols = api.myCollections()
+                    collectionsTotal = cols.size
                     val counted = ArrayList<RgCollection>()
+                    val countsBefore = prefs.collectionCounts
+                    val countsNow = HashMap<String, Int>()
                     for ((i, c) in cols.withIndex()) {
-                        status("Reading collection ${i + 1} of ${cols.size}: ${c.name}")
-                        val inIt = api.collectionClips(c, extras)
+                        val members = before0.filter { c.id in it.colIds }
+                        // A collection with the same number of clips as when it was last read is taken as it is.
+                        val inIt = if (!full && SyncPlan.collectionUnchanged(c.count, countsBefore[c.id], members.size))
+                            members.map { it.copy(sources = setOf(c.name), colIds = setOf(c.id)) }
+                        else {
+                            status("Reading collection ${i + 1} of ${cols.size}: ${c.name}")
+                            collectionsRead++
+                            api.collectionClips(c, extras)
+                        }
+                        countsNow[c.id] = c.count
                         inIt.forEach(::add)
                         counted += c.copy(count = inIt.size, thumb = c.thumb ?: inIt.firstOrNull()?.thumb)
                     }
+                    prefs.collectionCounts = countsNow
                     saveCollections(counted)
                     _state.update { it.copy(collections = counted) }
-                    AppLog.i("Collections: ${cols.size}")
                 }
+                AppLog.i((if (full) "Full sync" else "Quick sync") + ": likes " + (if (likesReadInFull) "read in full" else "checked from the top") +
+                    ", $collectionsRead of $collectionsTotal collection(s) read")
 
                 // Niche names: from the responses, then look up the rest (once; they're kept).
                 val names = HashMap(nicheNames).apply { putAll(extras.niches) }
@@ -411,9 +440,12 @@ class Library(private val ctx: Context) {
                     _state.value.performers + extras.performers
                 }
 
-                status("Checking folder…")
-                val scan = scanFolderFull()
+                // The folder is listed in a full pass; in between, the record of what the app saved is used.
+                val scan = if (full) { status("Checking folder…"); scanFolderFull().also { prefs.lastFolderScan = System.currentTimeMillis() } }
+                    else _state.value.let { it.qualities to it.partial }
                 val now = System.currentTimeMillis()
+                if (full) prefs.lastFullSync = now
+                if (likedSiteTotal > 0) prefs.likedSiteTotal = likedSiteTotal
                 var savedCount = 0
                 // Swap in the new list and read the download history in one step, so clips saved
                 // by a download running during this sync aren't lost.
@@ -566,6 +598,7 @@ class Library(private val ctx: Context) {
 
     fun rescan() {
         val (q, parts) = scanFolderFull()
+        prefs.lastFolderScan = System.currentTimeMillis()
         synchronized(lock) { val merged = mergeQ(readHistory(), q); _state.update { it.copy(qualities = merged, partial = parts) } }
     }
 

@@ -222,9 +222,15 @@ class RedGifsApi(private val token: String, private val userAgent: String,
      * time). If that feed comes back empty, the list of liked IDs is used instead and each clip
      * is looked up on its own.
      */
-    suspend fun likedClips(extras: FeedExtras, onPage: suspend (page: Int, pages: Int, total: Int) -> Unit): List<Clip> {
-        val fromFeed = paged("v2/feeds/liked?count=$LIKES_PER_PAGE&type=g", "Liked", extras, LIKES_PER_PAGE, onPage)
-        if (fromFeed.isNotEmpty()) return fromFeed
+    /**
+     * Your likes, newest first. With [known] (the IDs already on the phone) reading stops at the
+     * first page that holds nothing new: a quick sync. Without it, all pages are read.
+     */
+    suspend fun likedClips(extras: FeedExtras, known: Set<String>? = null, onPage: suspend (page: Int, pages: Int, total: Int) -> Unit): List<Clip> {
+        val fromFeed = paged("v2/feeds/liked?count=$LIKES_PER_PAGE&type=g", "Liked", extras, LIKES_PER_PAGE, onPage) { page ->
+            known != null && page.isNotEmpty() && page.all { it.id in known }
+        }
+        if (fromFeed.isNotEmpty() || known != null) return fromFeed
         val ids = runCatching {
             val t = getText("v2/likes").trim()
             val arr = if (t.startsWith("[")) JSONArray(t)
@@ -266,7 +272,7 @@ class RedGifsApi(private val token: String, private val userAgent: String,
     }
 
     suspend fun collectionClips(c: RgCollection, extras: FeedExtras): List<Clip> =
-        paged("v2/me/collections/${c.id}/gifs?count=100", c.name, extras, 100) { _, _, _ -> }.map { it.copy(colIds = setOf(c.id)) }
+        paged("v2/me/collections/${c.id}/gifs?count=100", c.name, extras, 100, onPage = { _, _, _ -> }).map { it.copy(colIds = setOf(c.id)) }
 
     /** Fresh copy of one clip (new media URLs if the old ones stopped working). */
     suspend fun clip(id: String): Clip? =
@@ -392,7 +398,9 @@ class RedGifsApi(private val token: String, private val userAgent: String,
         get("v2/niches/$id").let { j -> (j.optJSONObject("niche") ?: j).optString("name").takeIf { it.isNotBlank() } }
     }.getOrNull()
 
-    private suspend fun paged(base: String, source: String, extras: FeedExtras, perPage: Int, onPage: suspend (Int, Int, Int) -> Unit): List<Clip> {
+    private suspend fun paged(base: String, source: String, extras: FeedExtras, perPage: Int, onPage: suspend (Int, Int, Int) -> Unit,
+                              /** Given the clips of the page just read: true = nothing further is needed. */
+                              stop: (List<Clip>) -> Boolean = { false }): List<Clip> {
         val out = mutableListOf<Clip>()
         var page = 1
         while (true) {
@@ -412,6 +420,7 @@ class RedGifsApi(private val token: String, private val userAgent: String,
             }
             onPage(page, pages, j.optInt("total", 0))
             if (arr.length() == 0 || pages in 1..page || (pages == 0 && arr.length() < perPage)) break
+            if (stop(out.subList(before, out.size))) break
             page++
             delay(250)
         }

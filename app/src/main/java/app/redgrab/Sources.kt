@@ -17,14 +17,19 @@ import java.util.concurrent.atomic.AtomicBoolean
  * RedGifs IDs have none. [label] is what's kept in [Clip.sources] for clips saved from that site.
  */
 enum class OnlineSource(val label: String, val prefix: String) {
+    /** Not a site: every site that is set up, in one feed. No clip belongs to it (its prefix is never used). */
+    All("All sites", "all:"),
     RedGifs("RedGifs", ""), Reddit("Reddit", "rd-"), FikFap("FikFap", "ff-"), SexCom("sex.com", "sx-"),
     EroMe("EroMe", "er-"), FourChan("4chan", "4c-");
 
     companion object {
-        fun of(id: String): OnlineSource = entries.firstOrNull { it.prefix.isNotEmpty() && id.startsWith(it.prefix) } ?: RedGifs
+        /** The real sites. */
+        val SITES: List<OnlineSource> get() = entries.filter { it != All }
+
+        fun of(id: String): OnlineSource = entries.firstOrNull { it != All && it.prefix.isNotEmpty() && id.startsWith(it.prefix) } ?: RedGifs
 
         /** [Clip.sources] values that mean "saved from the Online tab" ("Discover" = RedGifs). */
-        val SAVED_LABELS: Set<String> = setOf("Discover") + entries.filter { it != RedGifs }.map { it.label }
+        val SAVED_LABELS: Set<String> = setOf("Discover") + entries.filter { it != RedGifs && it != All }.map { it.label }
 
         /**
          * True for clips that are saved as their own file in the "imported" subfolder instead of
@@ -350,6 +355,21 @@ class RedditApi(private val prefs: RedditStore, private val http: OkHttpClient) 
     }
 
     fun me(): String = get("/api/v1/me").text("name")
+
+    /** A subreddit as found by search: its name and how many follow it. */
+    data class SubInfo(val name: String, val subscribers: Long, val nsfw: Boolean)
+
+    /** Subreddits matching [query] (adult ones included), or the popular ones when it is blank. */
+    fun searchSubreddits(query: String): List<SubInfo> {
+        val q = query.trim()
+        val j = if (q.isEmpty()) get("/subreddits/popular", mapOf("limit" to "25"))
+            else get("/subreddits/search", mapOf("q" to q, "limit" to "25", "include_over_18" to "on"))
+        val children = j.optJSONObject("data")?.optJSONArray("children") ?: return emptyList()
+        return (0 until children.length()).mapNotNull { i ->
+            val d = children.optJSONObject(i)?.optJSONObject("data") ?: return@mapNotNull null
+            d.optString("display_name").takeIf { it.isNotBlank() }?.let { SubInfo(it, d.optLong("subscribers"), d.optBoolean("over18")) }
+        }
+    }
 
     private fun myName(): String = prefs.redditUser?.takeIf { it.isNotBlank() }
         ?: (if (prefs.redditRefresh != null) me().takeIf { it.isNotBlank() }?.also { prefs.redditUser = it } else null)
