@@ -280,6 +280,7 @@ class DownloadWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(c
                         AppLog.w("${clip.id}: ${e.message}; marked as removed and not tried again")
                         lib.markFailed(clip.id, reasonFor(e), dead = true)
                         gone++
+                        prune(clip)
                     } else {
                         AppLog.e("Failed to save ${clip.id}: ${e.message}", e.takeUnless { it is HttpException || isNetworkError(it) })
                         lib.markFailed(clip.id, reasonFor(e, OnlineSource.of(clip.id).label))
@@ -390,6 +391,19 @@ class DownloadWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(c
     }
 
     /**
+     * A RedGifs clip the site says is deleted is taken out of your RedGifs collections too (unless
+     * switched off), so the collection stops listing something that can never be downloaded.
+     */
+    private suspend fun prune(clip: Clip) {
+        if (OnlineSource.of(clip.id) != OnlineSource.RedGifs || !lib.prefs.pruneCollections || clip.colIds.isEmpty()) return
+        for (col in clip.colIds) {
+            runCatching { withRedGifs(applicationContext) { it.removeFromCollection(col, listOf(clip.id)) } }
+                .onSuccess { AppLog.i("${clip.id}: deleted on RedGifs, taken out of collection $col") }
+                .onFailure { AppLog.w("${clip.id}: could not be taken out of collection $col: ${it.message}") }
+        }
+    }
+
+    /**
      * Downloads into `<id>-<q>.part`, resuming an earlier partial file with an HTTP Range request
      * when the server supports it, then renames it to `<id>-hd.mp4` / `<id>-sd.mp4`. Never
      * overwrites an existing file. Refreshes media URLs once on 403/404/410. A failed or stopped
@@ -431,7 +445,8 @@ class DownloadWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(c
             return c ?: throw e
         }
 
-        val firstUrl = clip.url(q) ?: error("No ${q.label} video URL")
+        // No address at all (a collection can still list a clip the site has deleted): ask the site, which says so if it is gone.
+        val firstUrl = clip.url(q) ?: fresh()?.url(q) ?: error("No ${q.label} video URL")
         if (HlsSaver.isHls(firstUrl)) {
             val work = java.io.File(applicationContext.cacheDir, "hls")
             val name = clip.id + q.suffix

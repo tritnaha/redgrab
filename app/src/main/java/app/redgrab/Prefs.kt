@@ -248,6 +248,16 @@ class Prefs(context: Context) : RedditStore {
         get() = sp.getString("contentPrefs", null)?.split(',')?.filterTo(LinkedHashSet()) { it in ContentPrefs.ALL } ?: ContentPrefs.DEFAULT
         set(v) = sp.edit { putString("contentPrefs", v.filter { it in ContentPrefs.ALL }.joinToString(",")) }
 
+    /** The "what do you want to see?" question has been answered (asked once: on first use, or after the update that brought it). */
+    var contentPrefsAsked: Boolean
+        get() = sp.getBoolean("contentPrefsAsked", false)
+        set(v) = sp.edit { putBoolean("contentPrefsAsked", v) }
+
+    /** A clip RedGifs says is deleted is also taken out of your RedGifs collections, so it stops coming back with every sync. */
+    var pruneCollections: Boolean
+        get() = sp.getBoolean("pruneCollections", true)
+        set(v) = sp.edit { putBoolean("pruneCollections", v) }
+
     /** When the app was last left (epoch millis); "start in SFW mode" only counts after a real absence. */
     var lastLeftAt: Long
         get() = sp.getLong("lastLeftAt", 0)

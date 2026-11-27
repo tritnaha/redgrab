@@ -700,21 +700,27 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun clearDownloadQueue() = DownloadWorker.clear(getApplication())
 
     /**
-     * "Don't save these": stops what is running, empties the queue, and sets aside every clip that
-     * isn't on the phone, so none of them is counted, downloaded or retried again. They stay in the
-     * library under "Removed", where "Check again" brings them back.
+     * "Don't save": sets clips aside so they are not counted, downloaded or retried again. They
+     * stay in the library under "Removed", where "Check again" brings them back.
      */
+    fun skip(ids: kotlin.collections.Collection<String>) {
+        val set = ids.toSet()
+        if (set.isEmpty()) return
+        viewModelScope.launch(Dispatchers.IO) {
+            library.setQueue(library.readQueue().filter { it.substringBefore(' ') !in set })
+            set.forEach { library.markFailed(it, Library.SKIPPED, dead = true) }
+            AppLog.i("${set.size} unsaved clip(s) set aside; they won't be downloaded")
+        }
+    }
+
+    /** Everything that is waiting to be saved: stops what is running, empties the queue and sets all of it aside. */
     fun skipPending() {
         val s = state.value
-        val ids = s.originals.filter { it.id !in s.saved && it.id !in s.dead }.map { it.id }
+        val ids = s.pending.map { it.id }
         DownloadWorker.stop(getApplication())
         DownloadWorker.clear(getApplication())
-        if (ids.isEmpty()) return
-        viewModelScope.launch(Dispatchers.IO) {
-            ids.forEach { library.markFailed(it, Library.SKIPPED, dead = true) }
-            AppLog.i("${ids.size} unsaved clip(s) set aside; they won't be downloaded")
-            withContext(Dispatchers.Main) { say("%,d set aside. Find them under Removed.".format(ids.size)) }
-        }
+        skip(ids)
+        if (ids.isNotEmpty()) say("%,d set aside. Find them under Removed.".format(ids.size))
     }
 
     fun download(id: String) = startDownload(listOf(id))
@@ -1151,6 +1157,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     var contentPrefs by mutableStateOf(prefs.contentPrefs)
         private set
+
+    /** Asked once: the first time the app runs, or the first time after the update that brought the filter. */
+    var askContentPrefs by mutableStateOf(!prefs.contentPrefsAsked)
+        private set
+    fun contentPrefsAnswered() { prefs.contentPrefsAsked = true; askContentPrefs = false }
+
+    var pruneCollections by mutableStateOf(prefs.pruneCollections)
+        private set
+    fun changePruneCollections(v: Boolean) { prefs.pruneCollections = v; pruneCollections = v }
 
     /** Whether [clip] passes the content filter: its RedGifs labels, and what its tags, niches and title say. */
     fun allowed(clip: Clip): Boolean = ContentPrefs.allows(contentPrefs, clip.sexuality,

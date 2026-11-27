@@ -393,6 +393,16 @@ class RedGifsApi(private val token: String, private val userAgent: String,
         send("POST", "v2/me/collections/${enc(collectionId)}/gifs", JSONObject().put("gifId", clipId))
     }
 
+    /**
+     * Takes clips out of one of your collections, as the site's own "remove selected" does: a
+     * DELETE to the collection's list with the clip IDs as a JSON array. Written from the site's
+     * script; not run against an account from the build machine.
+     */
+    suspend fun removeFromCollection(collectionId: String, clipIds: List<String>) {
+        if (clipIds.isEmpty()) return
+        getText("v2/me/collections/${enc(collectionId)}/gifs", "DELETE", JSONArray(clipIds).toString().toRequestBody("application/json".toMediaType()))
+    }
+
     /** Creates a private collection and returns it (its ID is read from the answer, else looked up by name). */
     suspend fun createCollection(name: String): RgCollection {
         val text = send("POST", "v2/me/collections", JSONObject().put("folderName", name.trim()).put("description", JSONObject.NULL).put("published", false))

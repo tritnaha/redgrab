@@ -321,6 +321,9 @@ fun SettingsScreen(vm: MainViewModel, onSignIn: () -> Unit, onOpenLog: () -> Uni
             }
 
             Section("Sync") {
+                SwitchRow(Icons.Default.Sync, "Remove deleted clips from collections",
+                    "A clip RedGifs has deleted is also taken out of your RedGifs collections.",
+                    vm.pruneCollections, onChange = vm::changePruneCollections)
                 SwitchRow(Icons.Default.Sync, "Sync when the app opens",
                     "Last synced: ${Format.ago(s.lastSynced)}. Pull down on the Saved tab to sync any time.",
                     vm.refreshOnStart, onChange = vm::changeRefreshOnStart)

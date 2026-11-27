@@ -4,6 +4,8 @@
 # Needs one repository secret, SIGNING_KEYSTORE_B64: the signing key file, base64-encoded. Every
 # release must be signed with the same key, or Android refuses to install it over the last one.
 #
+# The emulator runs Android 16 (API 36); older versions are not tested.
+#
 # Before publishing, the build is run on an emulator (GitHub's Linux runners have hardware
 # acceleration for it): the last release is installed and updated to this build, and the app has
 # to start. See .github/scripts/upgrade-smoke.sh. "Run workflow" with "smoke" ticked does the
@@ -43,12 +45,14 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
       - name: Read the version
         id: version
+        env:
+          SMOKE: ${{ inputs.smoke }}
         run: |
           name=$(sed -n 's/^ *versionName = "\(.*\)".*/\1/p' app/build.gradle.kts | head -1)
           build=$(sed -n 's/^ *versionCode = \([0-9]*\).*/\1/p' app/build.gradle.kts | head -1)
@@ -58,7 +62,7 @@ jobs:
           if gh release view "v$name" > /dev/null 2>&1; then published=true; else published=false; fi
           echo "published=$published" >> "$GITHUB_OUTPUT"
           # Build and test when there is something to publish, or when asked to just test.
-          if [ "$published" = false ] || [ "${{ inputs.smoke }}" = "true" ]; then echo "work=true" >> "$GITHUB_OUTPUT"; else echo "work=false" >> "$GITHUB_OUTPUT"; fi
+          if [ "$published" = false ] || [ "$SMOKE" = "true" ]; then echo "work=true" >> "$GITHUB_OUTPUT"; else echo "work=false" >> "$GITHUB_OUTPUT"; fi
           echo "Version $name (build $build), published: $published"
 
       - name: Signing key
@@ -73,17 +77,21 @@ jobs:
           mkdir -p signing
           echo "$KEY" | base64 -d > signing/release.keystore
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         if: steps.version.outputs.work == 'true'
         with:
           distribution: temurin
           java-version: '21'
 
+      # Keeps Gradle's downloads and build cache between runs: most of a build's time otherwise.
+      - uses: gradle/actions/setup-gradle@v4
+        if: steps.version.outputs.work == 'true'
+
       - name: Build
         if: steps.version.outputs.work == 'true'
         run: |
           echo "sdk.dir=$ANDROID_HOME" > local.properties
-          ./gradlew --no-daemon testDebugUnitTest assembleRelease
+          ./gradlew testDebugUnitTest assembleRelease assembleDebug assembleDebugAndroidTest
         env:
           # Optional repository variable: a Reddit "installed app" client ID to build in (not a secret).
           REDDIT_CLIENT_ID: ${{ vars.REDDIT_CLIENT_ID }}
@@ -99,9 +107,9 @@ jobs:
         if: steps.version.outputs.work == 'true'
         uses: reactivecircus/android-emulator-runner@v2
         with:
-          api-level: 34
+          api-level: 36
           arch: x86_64
-          target: default
+          target: google_apis
           profile: pixel_6
           disable-animations: true
           emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
@@ -130,9 +138,9 @@ jobs:
         timeout-minutes: 20
         uses: reactivecircus/android-emulator-runner@v2
         with:
-          api-level: 34
+          api-level: 36
           arch: x86_64
-          target: default
+          target: google_apis
           profile: pixel_6
           disable-animations: true
           emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
@@ -143,13 +151,13 @@ jobs:
       - name: Behaviour tests on an emulator
         if: steps.version.outputs.work == 'true'
         continue-on-error: true
-        timeout-minutes: 25
+        timeout-minutes: 12
         uses: reactivecircus/android-emulator-runner@v2
         with:
-          api-level: 34
+          api-level: 36
           arch: x86_64
-          target: default
+          target: google_apis
           profile: pixel_6
           disable-animations: true
           emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
-          script: ./gradlew --no-daemon connectedDebugAndroidTest
+          script: bash .github/scripts/behaviour-tests.sh

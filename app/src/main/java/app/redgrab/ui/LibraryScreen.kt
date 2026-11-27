@@ -27,6 +27,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.lazy.staggeredgrid.LazyVerticalStaggeredGrid
 import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridCells
 import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridItemSpan
@@ -535,12 +536,31 @@ fun LibraryScreen(vm: MainViewModel, snack: SnackbarHostState, onSignIn: () -> U
     }
 
     if (confirmSaveAll) {
+        // The queue: everything waiting to be saved. Save it all, clear it all, or take single clips out.
+        val pending = s.pending
+        if (pending.isEmpty()) confirmSaveAll = false
         AlertDialog(
             onDismissRequest = { confirmSaveAll = false },
-            title = { Text("Save %,d clips?".format(s.newCount)) },
+            title = { Text("%,d to save".format(pending.size)) },
             text = {
                 Column {
-                    Text("Downloaded in the background. You can pause it at any time.")
+                    androidx.compose.foundation.lazy.LazyColumn(Modifier.fillMaxWidth().heightIn(max = 300.dp)) {
+                        items(pending.size, key = { pending[it].id }) { i ->
+                            val c = pending[i]
+                            Row(Modifier.fillMaxWidth().padding(vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+                                AsyncImage(c.thumb, null, contentScale = ContentScale.Crop,
+                                    modifier = Modifier.size(40.dp).clip(RoundedCornerShape(6.dp)).background(MaterialTheme.colorScheme.surfaceVariant)
+                                        .then(if (vm.sfw) Modifier.blur(12.dp) else Modifier))
+                                Spacer(Modifier.width(10.dp))
+                                Column(Modifier.weight(1f)) {
+                                    Text(c.user.ifBlank { c.id }, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodyMedium)
+                                    Text(s.failures[c.id]?.reason ?: c.sources.joinToString(), maxLines = 1, overflow = TextOverflow.Ellipsis,
+                                        style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                                IconButton(onClick = { vm.skip(listOf(c.id)) }) { Icon(Icons.Default.Close, "Don't save this one") }
+                            }
+                        }
+                    }
                     // The same setting as in Settings → Downloads.
                     Row(Modifier.fillMaxWidth().padding(top = 8.dp).clickable { vm.changeMobileData(!vm.mobileData) }, verticalAlignment = Alignment.CenterVertically) {
                         Column(Modifier.weight(1f)) {
@@ -555,9 +575,8 @@ fun LibraryScreen(vm: MainViewModel, snack: SnackbarHostState, onSignIn: () -> U
             confirmButton = { TextButton(onClick = { confirmSaveAll = false; vm.downloadAllNew() }) { Text("Save all") } },
             dismissButton = {
                 Row {
-                    // Clears them from the count and the queue for good (they move to "Removed").
-                    TextButton(onClick = { confirmSaveAll = false; vm.skipPending() }) { Text("Don't save these") }
-                    TextButton(onClick = { confirmSaveAll = false }) { Text("Cancel") }
+                    TextButton(onClick = { confirmSaveAll = false; vm.skipPending() }) { Text("Clear all") }
+                    TextButton(onClick = { confirmSaveAll = false }) { Text("Close") }
                 }
             },
         )

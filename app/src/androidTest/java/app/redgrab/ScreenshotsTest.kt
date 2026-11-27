@@ -131,6 +131,7 @@ class ScreenshotsTest {
             folderUri = Uri.parse("content://com.android.externalstorage.documents/tree/primary%3AMovies%2FRedGrab")
             folderLabel = "Movies/RedGrab"
             lastSeenBuild = BuildConfig.VERSION_CODE
+            contentPrefsAsked = true                                // the first-run question isn't part of these pictures
             searchIndexAt = System.currentTimeMillis()              // the lists below count as fresh: nothing is fetched
         }
         // What the search box suggests from: a few tags and niches, in the form the app stores RedGifs' lists.

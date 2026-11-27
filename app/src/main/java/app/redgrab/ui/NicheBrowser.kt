@@ -135,12 +135,12 @@ fun NicheBrowser(vm: MainViewModel, bottomPad: androidx.compose.ui.unit.Dp) {
 
 /** The content filter: which kinds of content the Online tab shows. Opened from the Online tab and from Settings. */
 @Composable
-fun ContentPrefsDialog(vm: MainViewModel, onClose: () -> Unit) {
+fun ContentPrefsDialog(vm: MainViewModel, firstTime: Boolean = false, onClose: () -> Unit) {
     var chosen by remember { mutableStateOf(vm.contentPrefs) }
     val open = ContentPrefs.unfiltered(chosen)
     AlertDialog(
         onDismissRequest = onClose,
-        title = { Text("Show") },
+        title = { Text(if (firstTime) "What do you want to see?" else "Show") },
         text = {
             Column {
                 Row(Modifier.fillMaxWidth().clickable { chosen = if (open) ContentPrefs.DEFAULT else ContentPrefs.ALL.toSet() }, verticalAlignment = Alignment.CenterVertically) {
@@ -153,11 +153,11 @@ fun ContentPrefsDialog(vm: MainViewModel, onClose: () -> Unit) {
                         Text(ContentPrefs.label(p))
                     }
                 }
-                Text("All sites, searches and suggestions. Also saved to your RedGifs account.",
+                Text(if (firstTime) "Change it later in Settings → Online." else "All sites, searches and suggestions. Also saved to your RedGifs account.",
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 8.dp))
             }
         },
         confirmButton = { TextButton(enabled = chosen.isNotEmpty(), onClick = { vm.changeContentPrefs(chosen); onClose() }) { Text("Save") } },
-        dismissButton = { TextButton(onClick = onClose) { Text("Cancel") } },
+        dismissButton = { if (!firstTime) TextButton(onClick = onClose) { Text("Cancel") } },
     )
 }

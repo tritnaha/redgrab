@@ -237,6 +237,8 @@ data class LibraryState(
     val saved: Set<String> by lazy { qualities.filterValues { it.isNotEmpty() }.keys + clips.filter { it.isCopy || it.imported }.map { it.id } }
     val originals: List<Clip> by lazy { clips.filter { !it.isCopy } }
     /** Clips that can still be saved: not on the phone, and not deleted on their site. */
+    /** Clips waiting to be saved: not on the phone, and not deleted on their site or set aside. */
+    val pending: List<Clip> get() = originals.filter { it.id !in saved && it.id !in dead }
     val newCount get() = originals.count { it.id !in saved && it.id !in dead }
     val savedCount get() = originals.count { it.id in saved }
 }

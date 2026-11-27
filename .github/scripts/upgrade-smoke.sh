@@ -38,18 +38,18 @@ if gh release download --pattern '*.apk' --dir prev 2> /dev/null && ls prev/*.ap
   old=$(ls prev/*.apk | head -1)
   echo "Updating from $(basename "$old")"
   adb install -g "$old" > /dev/null
-  start 20 "the last release"
+  start 12 "the last release"
   adb shell am force-stop "$PKG"
   adb install -r -g "$NEW"
   adb shell dumpsys package "$PKG" | grep -m2 -E "versionName|versionCode" || true
-  start 25 "this build, updated from the last release"
+  start 15 "this build, updated from the last release"
   adb shell am force-stop "$PKG"
-  start 15 "this build, started a second time"
+  start 8 "this build, started a second time"
   adb uninstall "$PKG" > /dev/null
 else
   echo "No earlier release to update from; only the fresh install is checked."
 fi
 adb install -g "$NEW" > /dev/null
-start 25 "this build, installed fresh"
+start 15 "this build, installed fresh"
 adb shell am force-stop "$PKG"
-start 15 "this build, installed fresh, started a second time"
+start 8 "this build, installed fresh, started a second time"

@@ -206,6 +206,8 @@ class MainActivity : ComponentActivity() {
                 }
 
                 vm.whatsNew?.let { app.redgrab.ui.WhatsNewDialog(it, vm::closeWhatsNew) }
+                // Asked once (first use, or first start after the update that brought it); the answer is kept.
+                if (vm.askContentPrefs && vm.whatsNew == null && !AppLock.locked) app.redgrab.ui.ContentPrefsDialog(vm, firstTime = true, onClose = vm::contentPrefsAnswered)
                 // An update that is downloaded is offered once per start; "Later" leaves it in Settings → About.
                 val updateState by Updater.state.collectAsStateWithLifecycle()
                 var updateDeclined by rememberSaveable { mutableIntStateOf(0) }
