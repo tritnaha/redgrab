@@ -37,7 +37,8 @@ import java.util.concurrent.TimeUnit
  * Android's installer. Android only accepts it if it is signed with the same key as the app
  * that is installed, so nothing but a genuine build can replace the app.
  *
- * While the repository is private, GitHub answers only with a token (Settings → About).
+ * While the repository is private, GitHub answers "not found" to anyone without a token
+ * (Settings → Troubleshooting): no update can be found until it is public or a token is set.
  */
 object Updater {
 
@@ -89,7 +90,7 @@ object Updater {
         .apply { if (!token.isNullOrBlank()) header("Authorization", "Bearer $token") }
 
     private fun explain(code: Int, hasToken: Boolean) = when {
-        code == 404 && !hasToken -> "No release found. If the repository is private, GitHub needs a token (Settings → About)."
+        code == 404 && !hasToken -> "Repository is private: updates need a token (Settings → Troubleshooting)."
         code == 404 -> "No release found, or the token can't read this repository."
         code == 401 -> "GitHub didn't accept the token."
         code == 403 || code == 429 -> "GitHub refused the request (HTTP $code). Try later."
@@ -231,7 +232,7 @@ object Updater {
 
     /** Files a report as an issue on the repository. Returns the issue's address. */
     suspend fun sendReport(ctx: Context, title: String, body: String): String = withContext(Dispatchers.IO) {
-        val token = ctx.library.prefs.githubToken?.takeIf { it.isNotBlank() } ?: throw java.io.IOException("Add a GitHub token first (Settings → About).")
+        val token = ctx.library.prefs.githubToken?.takeIf { it.isNotBlank() } ?: throw java.io.IOException("Add a GitHub token first (Settings → Troubleshooting).")
         val json = JSONObject().put("title", title.take(120)).put("body", body).toString().toRequestBody("application/json".toMediaType())
         RedGifsApi.clientFor(ctx.userAgent).newCall(request("$API/issues", token, "application/vnd.github+json").post(json).build()).execute().use { r ->
             val text = r.body?.string().orEmpty()

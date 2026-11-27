@@ -449,7 +449,7 @@ fun LibraryScreen(vm: MainViewModel, snack: SnackbarHostState, onSignIn: () -> U
                 if (vm.filter == Filter.Dead && s.dead.isNotEmpty()) {
                     item(span = StaggeredGridItemSpan.FullLine) {
                         Row(verticalAlignment = Alignment.CenterVertically, modifier = head.fillMaxWidth().padding(vertical = 2.dp)) {
-                            Text("Deleted on the site. Not downloaded again.", Modifier.weight(1f),
+                            Text("Deleted on the site, or set aside by you. Not downloaded again.", Modifier.weight(1f),
                                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                             TextButton(onClick = { vm.retryFailed(s.dead) }) { Text("Check again") }
                         }
@@ -553,7 +553,13 @@ fun LibraryScreen(vm: MainViewModel, snack: SnackbarHostState, onSignIn: () -> U
                 }
             },
             confirmButton = { TextButton(onClick = { confirmSaveAll = false; vm.downloadAllNew() }) { Text("Save all") } },
-            dismissButton = { TextButton(onClick = { confirmSaveAll = false }) { Text("Cancel") } },
+            dismissButton = {
+                Row {
+                    // Clears them from the count and the queue for good (they move to "Removed").
+                    TextButton(onClick = { confirmSaveAll = false; vm.skipPending() }) { Text("Don't save these") }
+                    TextButton(onClick = { confirmSaveAll = false }) { Text("Cancel") }
+                }
+            },
         )
     }
     SfwAndFilterDialogs(vm, s, showFilters, { showFilters = false }, confirmSfwOff, { confirmSfwOff = false })
@@ -622,7 +628,7 @@ private fun DownloadCard(p: DownloadProgress, failedCount: Int, vm: MainViewMode
                     Spacer(Modifier.width(12.dp))
                     Text(p.message, Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
                     TextButton(onClick = vm::resumeDownload) { Text("Resume") }
-                    IconButton(onClick = vm::clearDownloadQueue) { Icon(Icons.Default.Close, "Forget these") }
+                    TextButton(onClick = vm::clearDownloadQueue) { Text("Clear queue") }
                 }
                 else -> Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(if (p.failed > 0) Icons.Default.ErrorOutline else Icons.Default.CheckCircle, null,

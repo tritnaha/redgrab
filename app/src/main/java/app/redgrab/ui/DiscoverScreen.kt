@@ -125,6 +125,7 @@ fun DiscoverScreen(vm: MainViewModel, onSignIn: () -> Unit, onOpenSettings: () -
     LaunchedEffect(ready, vm.sfw, source, vm.redditUser) {
         if (ready && !vm.sfw) {
             if (source == OnlineSource.RedGifs) vm.loadFollowedNiches()
+            if (source == OnlineSource.RedGifs || source == OnlineSource.All) vm.ensureSearchIndex()
             if (source == OnlineSource.Reddit) vm.loadSubreddits()
             if (d.items.isEmpty() && !d.loading && d.error == null) vm.loadMoreDiscover()
         }
@@ -165,10 +166,8 @@ fun DiscoverScreen(vm: MainViewModel, onSignIn: () -> Unit, onOpenSettings: () -
                 ),
                 actions = {
                     OnlinePill()
-                    // What kinds of content RedGifs feeds show.
-                    if (source == OnlineSource.RedGifs && vm.signedIn) IconButton(onClick = { showPrefs = true }) {
-                        Icon(Icons.Default.Tune, "What to show")
-                    }
+                    // The content filter: applies to every site, and is the same setting as in Settings.
+                    if (!vm.sfw) IconButton(onClick = { showPrefs = true }) { Icon(Icons.Default.Tune, "Filter: what to show") }
                     IconButton(onClick = { showView = true }) { Icon(Icons.Default.GridView, "View: grid or wall, preview size") }
                 },
                 navigationIcon = {
@@ -282,43 +281,18 @@ fun DiscoverScreen(vm: MainViewModel, onSignIn: () -> Unit, onOpenSettings: () -
                     OnlineSource.FourChan -> "Search /gif/ threads"
                 }
                 BarSearchField(query, { query = it; vm.suggest(it) }, hint, modifier = head, leadingIcon = true,
-                    onSearch = { keyboard?.hide(); vm.suggest(""); vm.openFeed(Feed.fromQuery(source, query)) })
+                    onSearch = { keyboard?.hide(); vm.suggest(""); vm.openFeed(vm.feedFor(source, query)) })
             }
-            // While typing on RedGifs: tags and niches that match.
-            // Subreddits matching what is typed (on Reddit and in All sites).
-            if (vm.subSuggestions.isNotEmpty() && (source == OnlineSource.Reddit || source == OnlineSource.All)) {
+            // While typing: things that exist and match (tags and niches from the lists kept on the phone).
+            if (vm.suggestions.isNotEmpty()) {
                 item(span = StaggeredGridItemSpan.FullLine) {
-                    CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides 40.dp) {
-                        LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp), contentPadding = PaddingValues(horizontal = m.head), verticalAlignment = Alignment.CenterVertically) {
-                            item(key = "subs-label") { Text("Subreddits", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary) }
-                            items(vm.subSuggestions, key = { "s" + it.name }) { sub ->
-                                AssistChip(onClick = { keyboard?.hide(); vm.suggest(""); vm.openFeed(Feed.Subreddit(sub.name)) },
-                                    label = { Text("r/${sub.name} · ${Format.count(sub.subscribers)}", maxLines = 1) })
-                            }
-                        }
-                    }
-                }
-            }
-            if ((source == OnlineSource.RedGifs || source == OnlineSource.All) && (vm.tagSuggestions.isNotEmpty() || vm.nicheSuggestions.isNotEmpty())) {
-                item(span = StaggeredGridItemSpan.FullLine) {
-                    CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides 40.dp) {
-                        // Two rows, each named for what it holds: a niche is a community with its own feed, a tag is a word on clips.
-                        Column {
-                            if (vm.nicheSuggestions.isNotEmpty()) LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp), contentPadding = PaddingValues(horizontal = m.head),
+                    Column(head.clip(RoundedCornerShape(12.dp)).background(MaterialTheme.colorScheme.surfaceContainerHigh)) {
+                        vm.suggestions.forEach { sug ->
+                            Row(Modifier.fillMaxWidth().clickable { keyboard?.hide(); vm.suggest(""); vm.openFeed(sug.feed) }.padding(horizontal = 14.dp, vertical = 10.dp),
                                 verticalAlignment = Alignment.CenterVertically) {
-                                item(key = "niches-label") { Text("Niches", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary) }
-                                items(vm.nicheSuggestions, key = { "n" + it.id }) { n ->
-                                    AssistChip(onClick = { keyboard?.hide(); vm.suggest(""); vm.openFeed(Feed.Niche(n.id, n.name)) },
-                                        label = { Text("${n.name} · ${Format.count(n.subscribers)}", maxLines = 1) })
-                                }
-                            }
-                            if (vm.tagSuggestions.isNotEmpty()) LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp), contentPadding = PaddingValues(horizontal = m.head),
-                                verticalAlignment = Alignment.CenterVertically) {
-                                item(key = "tags-label") { Text("Tags", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary) }
-                                items(vm.tagSuggestions, key = { "t" + it.text }) { t ->
-                                    AssistChip(onClick = { keyboard?.hide(); vm.suggest(""); vm.openFeed(Feed.Search(t.text)) },
-                                        label = { Text("#${t.text} · ${Format.count(t.clips)}", maxLines = 1) })
-                                }
+                                Text(sug.label, Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text(listOf(sug.kind.word, sug.detail).filter { it.isNotEmpty() }.joinToString(" · "), style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, modifier = Modifier.padding(start = 12.dp))
                             }
                         }
                     }
@@ -369,26 +343,48 @@ fun DiscoverScreen(vm: MainViewModel, onSignIn: () -> Unit, onOpenSettings: () -
                 }
             }
             // Tags you follow (kept in the app): one tap opens the tag.
-            if (source == OnlineSource.RedGifs && vm.followedTags.isNotEmpty() && (home || d.feed is Feed.Search)) {
+            if (source == OnlineSource.RedGifs && vm.followedTags.isNotEmpty() && (home || d.feed is Feed.Search || d.feed is Feed.Tags)) {
                 item(span = StaggeredGridItemSpan.FullLine) {
                     CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides 40.dp) {
                         LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp), contentPadding = PaddingValues(horizontal = m.head), verticalAlignment = Alignment.CenterVertically) {
                             item(key = "followed-tags-label") { Text("Tags you follow", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary) }
                             items(vm.followedTags, key = { "ft$it" }) { t ->
-                                FilterChip((d.feed as? Feed.Search)?.query.equals(t, ignoreCase = true), { vm.openFeed(Feed.Search(t)) }, { Text("#$t", maxLines = 1) })
+                                FilterChip((d.feed is Feed.Search || d.feed is Feed.Tags) && d.feed.query.equals(t, ignoreCase = true), { vm.openFeed(vm.feedFor(OnlineSource.RedGifs, t)) }, { Text("#$t", maxLines = 1) })
                             }
                         }
                     }
                 }
             }
-            // A search for words: follow them as a tag from here.
-            (d.feed as? Feed.Search)?.takeIf { it.query.isNotBlank() }?.let { f ->
+            // Clips the filter left out of this feed.
+            if (d.hidden > 0) {
                 item(span = StaggeredGridItemSpan.FullLine) {
                     Row(head, verticalAlignment = Alignment.CenterVertically) {
-                        Text("#${f.query}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f),
+                        Text("%,d hidden by your filter".format(d.hidden), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.weight(1f))
+                        TextButton(onClick = { showPrefs = true }) { Text("Filter") }
+                    }
+                }
+            }
+            // Words that are existing tags: clips with exactly those tags, or the site's looser text search.
+            val asTags = when (val f = d.feed) { is Feed.Tags -> f.tags; is Feed.Search -> vm.tagsIn(f.query); else -> null }
+            if (asTags != null) {
+                item(span = StaggeredGridItemSpan.FullLine) {
+                    CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides 40.dp) {
+                        Row(head, horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                            FilterChip(d.feed is Feed.Tags, { if (d.feed !is Feed.Tags) vm.openFeed(Feed.Tags(asTags)) }, { Text(if (asTags.size > 1) "Every tag" else "Exact tag") })
+                            FilterChip(d.feed is Feed.Search, { if (d.feed !is Feed.Search) vm.openFeed(Feed.Search(asTags.joinToString(" "))) }, { Text("Text search") })
+                        }
+                    }
+                }
+            }
+            // A tag, or a search for words: follow it from here.
+            ((d.feed as? Feed.Search)?.query?.takeIf { it.isNotBlank() } ?: (d.feed as? Feed.Tags)?.tags?.singleOrNull())?.let { tag ->
+                item(span = StaggeredGridItemSpan.FullLine) {
+                    Row(head, verticalAlignment = Alignment.CenterVertically) {
+                        Text("#$tag", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f),
                             maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        if (vm.followsTag(f.query)) androidx.compose.material3.OutlinedButton(onClick = { vm.toggleTag(f.query) }) { Text("Following tag") }
-                        else androidx.compose.material3.FilledTonalButton(onClick = { vm.toggleTag(f.query) }) { Text("Follow tag") }
+                        if (vm.followsTag(tag)) androidx.compose.material3.OutlinedButton(onClick = { vm.toggleTag(tag) }) { Text("Following tag") }
+                        else androidx.compose.material3.FilledTonalButton(onClick = { vm.toggleTag(tag) }) { Text("Follow tag") }
                     }
                 }
             }

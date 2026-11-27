@@ -44,7 +44,8 @@ class SyncWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, 
 
     override suspend fun doWork(): Result {
         val lib = applicationContext.library
-        if (!lib.prefs.signedIn || lib.state.value.watched.isEmpty()) return Result.success()
+        // Without chosen collections the list is still brought up to date; only those are downloaded.
+        if (!lib.prefs.signedIn) return Result.success()
         // An expired session is renewed out of sight; only when that doesn't work are you asked to sign in.
         if (Session.state(lib.prefs) == Session.State.Expired && !SessionRenewer.renew(applicationContext)) {
             notify(Notices.SIGN_IN); return Result.success()

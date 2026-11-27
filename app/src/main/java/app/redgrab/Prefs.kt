@@ -144,7 +144,7 @@ class Prefs(context: Context) : RedditStore {
 
     /** Background check for new clips in synced collections: every N hours, 0 = off. */
     var autoSyncHours: Int
-        get() = sp.getInt("autoSyncHours", 0)
+        get() = sp.getInt("autoSyncHours", 12)
         set(v) = sp.edit { putInt("autoSyncHours", v) }
 
     /** Background sync only on Wi-Fi (unmetered). */
@@ -163,7 +163,7 @@ class Prefs(context: Context) : RedditStore {
 
     /** Client ID of the "installed app" the user created at reddit.com/prefs/apps. */
     override var redditClientId: String?
-        get() = sp.getString("redditClientId", null)
+        get() = sp.getString("redditClientId", null) ?: BuildConfig.REDDIT_CLIENT_ID.ifEmpty { null }
         set(v) = sp.edit { putString("redditClientId", v) }
 
     /** Short-lived access token (the user's, or an app-only one when not signed in). */
@@ -245,7 +245,7 @@ class Prefs(context: Context) : RedditStore {
 
     /** Which kinds of content the Online tab shows (see ContentPrefs); all of them unless you choose. */
     var contentPrefs: Set<String>
-        get() = sp.getString("contentPrefs", null)?.split(',')?.filterTo(LinkedHashSet()) { it in ContentPrefs.ALL } ?: ContentPrefs.ALL.toSet()
+        get() = sp.getString("contentPrefs", null)?.split(',')?.filterTo(LinkedHashSet()) { it in ContentPrefs.ALL } ?: ContentPrefs.DEFAULT
         set(v) = sp.edit { putString("contentPrefs", v.filter { it in ContentPrefs.ALL }.joinToString(",")) }
 
     /** When the app was last left (epoch millis); "start in SFW mode" only counts after a real absence. */
@@ -272,6 +272,11 @@ class Prefs(context: Context) : RedditStore {
     var followedTags: List<String>
         get() = sp.getString("followedTags", null)?.split('\n')?.filter { it.isNotBlank() } ?: emptyList()
         set(v) = sp.edit { putString("followedTags", v.map { it.trim().replace('\n', ' ') }.filter { it.isNotEmpty() }.distinctBy { it.lowercase() }.joinToString("\n")) }
+
+    /** When the lists behind the search suggestions (every tag and niche on RedGifs) were last read (epoch millis). */
+    var searchIndexAt: Long
+        get() = sp.getLong("searchIndexAt", 0)
+        set(v) = sp.edit { putLong("searchIndexAt", v) }
 
     /** When everything was last read from RedGifs (epoch millis); quick syncs in between only fetch what is new. */
     var lastFullSync: Long

@@ -45,11 +45,15 @@ android {
         minSdk = 26
         targetSdk = 36
         // The build number has to go up with every release: the updater compares it.
-        versionCode = 23
-        versionName = "13.10"
+        versionCode = 24
+        versionName = "13.11"
         // Only used by the screenshot test (app/src/androidTest), which runs on a phone or emulator.
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("String", "GITHUB_REPO", "\"tritnaha/redgrab\"")
+        // Optional: a Reddit "installed app" client ID built in, so Reddit works without typing one in.
+        // Such an ID is not a secret. Set with -PredditClientId=... or the REDDIT_CLIENT_ID environment variable.
+        val redditId = ((findProperty("redditClientId") as String?) ?: System.getenv("REDDIT_CLIENT_ID") ?: "").filter { it.isLetterOrDigit() || it == '_' || it == '-' }
+        buildConfigField("String", "REDDIT_CLIENT_ID", "\"$redditId\"")
         buildConfigField("String", "GIT_SHA", "\"$gitSha\"")
         buildConfigField("String", "BUILD_DATE", "\"${LocalDate.now()}\"")
         if (sideBySide) {

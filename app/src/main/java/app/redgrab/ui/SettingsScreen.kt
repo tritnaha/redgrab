@@ -19,6 +19,7 @@ import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.foundation.clickable
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
@@ -133,6 +134,18 @@ fun SettingsScreen(vm: MainViewModel, onSignIn: () -> Unit, onOpenLog: () -> Uni
                     Text(when (val u = vm.redditUser) { null -> "Not signed in"; "" -> "Signed in"; else -> "u/$u" },
                         style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
+            }
+
+            Section("Online") {
+                // The same filter as the button on the Online tab.
+                var showPrefs by remember { mutableStateOf(false) }
+                if (showPrefs) ContentPrefsDialog(vm) { showPrefs = false }
+                ListItem(
+                    headlineContent = { Text("Show") },
+                    supportingContent = { Text(app.redgrab.ContentPrefs.summary(vm.contentPrefs)) },
+                    leadingContent = { Icon(Icons.Default.Tune, null) },
+                    modifier = Modifier.clickable { showPrefs = true },
+                )
             }
 
             Section("Save folder") {
@@ -276,7 +289,7 @@ fun SettingsScreen(vm: MainViewModel, onSignIn: () -> Unit, onOpenLog: () -> Uni
 
             Section("Auto-sync") {
                 Row_(Icons.Default.Sync, "Synced collections",
-                    if (s.watched.isEmpty()) "None yet. Switch collections on in Browse → Collections; new clips in them are saved automatically after every sync."
+                    if (s.watched.isEmpty()) "None chosen: the list is kept up to date, nothing is downloaded. Choose them in Browse → Collections."
                     else "${s.watched.size} synced. New clips in them are saved automatically after every sync.")
                 Text("Check in the background", fontWeight = FontWeight.Medium, modifier = Modifier.padding(start = 16.dp, top = 4.dp))
                 SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
@@ -446,7 +459,7 @@ fun SettingsScreen(vm: MainViewModel, onSignIn: () -> Unit, onOpenLog: () -> Uni
                 )
                 // Only for filing a report as a GitHub issue from inside the app. Updates don't need it.
                 var token by remember(vm.githubToken) { mutableStateOf(vm.githubToken) }
-                OutlinedTextField(token, { token = it.trim() }, singleLine = true, label = { Text("GitHub token (optional)") },
+                OutlinedTextField(token, { token = it.trim() }, singleLine = true, label = { Text("GitHub token (private repository only)") },
                     visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
                     supportingText = { Text("Only for \"Send to GitHub\" in Report a problem (Issues: read and write). Updates work without it.") },
                     modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 4.dp))

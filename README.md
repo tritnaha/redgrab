@@ -27,7 +27,7 @@ Version 13.6 on an emulator, with made-up clips. The thumbnails are drawn by the
 - Syncs your RedGifs likes and collections; downloads in HD, falls back to SD
 - Resumes interrupted downloads; retries failures; skips clips the site has deleted
 - Quick sync (only what is new), full sync weekly or on demand
-- Background sync for chosen collections; mobile data only if you allow it
+- Background sync every 12 hours by default; downloads new clips of chosen collections; mobile data only if you allow it
 - Filter by tag, creator, niche, your own categories, length, orientation, sound
 - Import a folder of existing clips
 - Finds byte-identical duplicates
@@ -37,12 +37,16 @@ Version 13.6 on an emulator, with made-up clips. The thumbnails are drawn by the
 | Source | Browse by | Needs |
 | --- | --- | --- |
 | All sites | one feed across every site set up, one search | whatever each site needs |
-| RedGifs | My feed (followed niches and tags), For you, search, niche browser, creator, related | RedGifs sign-in |
+| RedGifs | My feed (followed niches and tags), For you, search with suggestions, exact tags, niche browser, creator, related | RedGifs sign-in |
 | Reddit | front page, subreddit, user, your saved/upvoted | your own client ID |
 | FikFap | hashtag, user | nothing |
 | sex.com | GIF search | nothing |
 | EroMe | search, user | nothing |
 | 4chan | `/gif/` threads | nothing |
+
+Search suggests only tags, niches, creators and subreddits that exist. RedGifs' tag and niche lists are cached on the phone.
+
+A content filter (straight, lesbian, gay, trans, bisexual, animated) applies to every site and search. Gay and trans are off until switched on.
 
 **Viewing**
 - Grid or wall layout, 2–6 per row, more when the phone is sideways
@@ -69,9 +73,11 @@ Requires Android 8.0 or later.
 
 Later versions install over earlier ones as long as they come from Releases. Android refuses a build signed with a different key.
 
+The app looks for new releases by itself. That works without setup only while this repository is public; for a private repository, enter a read-only GitHub token under Settings → Troubleshooting.
+
 ### Reddit
 
-Reddit needs a client ID of your own:
+Reddit needs a client ID, unless the build carries one (`-PredditClientId=…`, or the repository variable `REDDIT_CLIENT_ID` for releases):
 
 1. Go to <https://www.reddit.com/prefs/apps> and create an app of type **installed app**.
 2. Set the redirect URI to `redgrab://reddit`.
@@ -114,6 +120,12 @@ One test runs against the real RedGifs site and is skipped unless asked for:
 REDGRAB_LIVE=1 ./gradlew testDebugUnitTest --tests '*LiveRedGifsTest*'
 ```
 
+Another asks GitHub for the latest release as the app's updater does, without a token:
+
+```bash
+REDGRAB_LIVE=1 ./gradlew testDebugUnitTest --tests '*LiveUpdateTest*'
+```
+
 ### Screenshots
 
 `app/src/androidTest/.../ScreenshotsTest.kt` fills the app with sample clips and takes the pictures above. It needs an emulator or a spare phone (it overwrites the app's sign-in and library there):
@@ -144,6 +156,8 @@ Pushing a new `versionName` in `app/build.gradle.kts` runs `.github/workflows/re
 
 - Needs the repository secret `SIGNING_KEYSTORE_B64` (the keystore, base64-encoded).
 - Release notes come from the version's section in [`CHANGELOG.md`](CHANGELOG.md). The build fails if the current version has no entry.
+- Before publishing, the last release is installed on an emulator and updated to the new build; the app has to start.
+- After publishing, the release before is installed on an emulator and has to update itself through the app's own updater. "Run workflow" with `updater` ticked runs only that.
 
 ## Project layout
 
@@ -155,6 +169,7 @@ Pushing a new `versionName` in `app/build.gradle.kts` runs `.github/workflows/re
 | `.../DownloadWorker.kt`, `SyncWorker.kt` | Background downloads and sync |
 | `.../Library.kt`, `Db.kt` | Library state and database |
 | `.../Updater.kt`, `Changelog.kt` | Updates and changelog |
+| `.../SearchIndex.kt` | Cached tag and niche lists, suggestion matching |
 | `.../SecretStore.kt`, `AppLock.kt` | Token storage and app lock |
 | `app/src/test/` | Unit tests |
 

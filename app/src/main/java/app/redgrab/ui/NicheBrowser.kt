@@ -27,6 +27,7 @@ import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -132,22 +133,27 @@ fun NicheBrowser(vm: MainViewModel, bottomPad: androidx.compose.ui.unit.Dp) {
     }
 }
 
-/** Which kinds of content the Online tab shows. */
+/** The content filter: which kinds of content the Online tab shows. Opened from the Online tab and from Settings. */
 @Composable
 fun ContentPrefsDialog(vm: MainViewModel, onClose: () -> Unit) {
     var chosen by remember { mutableStateOf(vm.contentPrefs) }
+    val open = ContentPrefs.unfiltered(chosen)
     AlertDialog(
         onDismissRequest = onClose,
         title = { Text("Show") },
         text = {
             Column {
+                Row(Modifier.fillMaxWidth().clickable { chosen = if (open) ContentPrefs.DEFAULT else ContentPrefs.ALL.toSet() }, verticalAlignment = Alignment.CenterVertically) {
+                    Text("No filter", Modifier.weight(1f).padding(start = 12.dp), fontWeight = FontWeight.SemiBold)
+                    Switch(open, { on -> chosen = if (on) ContentPrefs.ALL.toSet() else ContentPrefs.DEFAULT })
+                }
                 ContentPrefs.ALL.forEach { p ->
                     Row(Modifier.fillMaxWidth().clickable { chosen = if (p in chosen) chosen - p else chosen + p }, verticalAlignment = Alignment.CenterVertically) {
                         Checkbox(p in chosen, { on -> chosen = if (on) chosen + p else chosen - p })
                         Text(ContentPrefs.label(p))
                     }
                 }
-                Text("Applies to RedGifs here and on your RedGifs account. Clips without a label are shown.",
+                Text("All sites, searches and suggestions. Also saved to your RedGifs account.",
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 8.dp))
             }
         },

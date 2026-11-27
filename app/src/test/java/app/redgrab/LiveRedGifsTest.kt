@@ -111,6 +111,38 @@ class LiveRedGifsTest {
         val tags = api.suggestTags("dan")
         say("tag suggestions for \"dan\": ${tags.size}, most used has ${tags.firstOrNull()?.clips} clips")
         assertTrue(tags.isNotEmpty() && tags.first().clips >= tags.last().clips)
+        // What the search suggestions are made from: every tag and every niche, read once and kept on the phone.
+        val allTags = api.allTags()
+        say("every tag: ${allTags.size}; most used \"${allTags.maxByOrNull { it.count }?.name}\"")
+        assertTrue(allTags.size > 3000 && allTags.all { it.name.isNotBlank() })
+        val allNiches = api.allNiches()
+        say("every niche: ${allNiches.size}; labelled for an audience: ${allNiches.count { it.labels.isNotEmpty() }}")
+        assertTrue(allNiches.size > 1000 && allNiches.all { it.id.isNotBlank() && it.name.isNotBlank() })
+        val names = allTags.associate { Suggest.norm(it.name) to it.name }
+        say("suggestions for \"sens\": ${Suggest.rank(allTags, "sens", 5).map { it.name }}; for \"bdsm sen\": ${Suggest.combos(names, allTags, "bdsm sen", 3)}")
+        assertTrue(Suggest.rank(allTags, "sens", 5).isNotEmpty())
+        say("creators for \"mia\": ${api.suggestCreators("mia").size}")
+        // Several words: the text search also returns clips with only some of them as tags; the tag search only clips with all.
+        val pair = Suggest.asTags(names, "bdsm sensual")
+        assertEquals(listOf("BDSM", "Sensual"), pair)
+        val words = api.searchClips("bdsm sensual", OnlineOrder.Trending, 1, extras)
+        val both = api.tagClips(pair!!, OnlineOrder.Trending, 1, extras)
+        fun withBoth(p: OnlinePage) = p.clips.count { c -> pair.all { t -> c.tags.any { it.equals(t, ignoreCase = true) } } }
+        check("Every-tag search", both)
+        say("\"bdsm sensual\" as text: ${words.clips.size} clips, ${withBoth(words)} with both tags; as tags: ${both.clips.size} clips, ${withBoth(both)} with both")
+        assertTrue("the every-tag search returned clips without the tags", withBoth(both) >= both.clips.size * 8 / 10)
+        for (order in OnlineOrder.entries) assertTrue(api.tagClips(pair, order, 1, extras).clips.isNotEmpty())
+        // The filter: how much of a general page and of a "gay" search it leaves.
+        val gay = api.tagClips(listOf("Gay"), OnlineOrder.Trending, 1, extras)
+        fun kept(p: OnlinePage, allowed: Set<String>) = p.clips.count { ContentPrefs.allows(allowed, it.sexuality, it.tags + it.niches + it.nicheIds) }
+        say("filter (default): keeps ${kept(home, ContentPrefs.DEFAULT)} of ${home.clips.size} on the home page, ${kept(gay, ContentPrefs.DEFAULT)} of ${gay.clips.size} of the tag \"Gay\"; " +
+            "unlabelled on the home page: ${home.clips.count { it.sexuality.isEmpty() }}")
+        assertEquals(gay.clips.size, kept(gay, ContentPrefs.ALL.toSet()))
+        assertTrue(kept(gay, ContentPrefs.DEFAULT) <= gay.clips.size / 10)
+        // The text search is loose: a search for the word also returns clips that carry no such tag.
+        val loose = api.searchClips("gay", OnlineOrder.Trending, 1, extras)
+        say("text search \"gay\": ${loose.clips.size} clips, ${loose.clips.count { c -> c.tags.any { it.equals("gay", true) } }} tagged Gay; the filter keeps ${kept(loose, ContentPrefs.DEFAULT)}")
+
         // The mix: a few clips from each of several niches, as "My niches" asks for them.
         val some = api.searchNiches("", null, NicheOrder.Subscribers, 1, count = 10).niches.take(3).map { it.id }
         val parts = NicheMix.plan(1, some).map { (id, p) -> api.nicheClips(id, OnlineOrder.Trending, p, extras, count = NicheMix.PER_NICHE) }

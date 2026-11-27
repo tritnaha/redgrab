@@ -6,6 +6,29 @@ time it opens after an update, and the whole list under Settings → About → W
 Each version has the sections it needs out of Added, Changed and Fixed, one line per change,
 and a link to the code that made it.
 
+## 13.11 (build 24) · 2026-11-27
+
+### Added
+- Search suggestions as you type, only for things that exist: tags, niches, creators and subreddits, listed under the search box.
+- RedGifs' full tag and niche lists are kept on the phone (refreshed weekly), so tags and niches are suggested at once.
+- Several words that are all tags ("bdsm sensual") open the clips that carry every one of them. "Text search" switches to the site's own, looser search.
+- Half-typed searches are completed: "bdsm sen" offers "BDSM + Sensual".
+- The filter (Online tab, top right) is also in Settings → Online → Show, and has a "No filter" switch. It now applies to every site, every search and the suggestions.
+- "N hidden by your filter" under a search, with a shortcut to the filter.
+- "Save all" has "Don't save these": clears the count and the queue; the clips move to Removed.
+- A paused download has "Clear queue".
+
+### Changed
+- Gay and trans content is hidden unless you switch it on or choose "No filter". Clips are also judged by their tags, not only by RedGifs' label.
+- A tag you tap or follow is asked for exactly. Before, it went through the text search, which also returns similar words.
+- Background sync is on by default (every 12 hours, Wi-Fi unless mobile data is allowed) and keeps the list up to date even with no collection chosen for download.
+- A build can carry a Reddit client ID, so Reddit works without entering one.
+
+- The update check says so when the repository is private (GitHub then answers "not found" without a token).
+
+### Fixed
+- An unreliable unit test (stream sizes) that could fail a release build.
+
 ## 13.10 (build 23) · 2026-11-27
 
 ### Added
@@ -16,6 +39,8 @@ and a link to the code that made it.
 ### Changed
 - Syncing is quick: it fetches new likes from the top and reads a collection again only when its size on RedGifs changed. Everything is read again once a week.
 - The save folder is no longer listed at every start (at most every twelve hours, and in a full sync).
+
+[Details](https://github.com/tritnaha/redgrab/commit/fe823ae)
 
 ## 13.9 (build 22) · 2026-11-27
 

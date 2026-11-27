@@ -89,7 +89,8 @@ class ChangelogTest {
     }
 
     @Test fun streamSizeIsAskedBeforeDownloading() = runBlocking {
-        val asked = ArrayList<String>()
+        // The pieces are asked for several at a time, so the list is filled from more than one thread.
+        val asked = java.util.Collections.synchronizedList(ArrayList<String>())
         fun client(sizeOf: (String) -> String?): OkHttpClient = OkHttpClient.Builder().addInterceptor { chain ->
             val req = chain.request()
             asked += req.method + " " + req.url.encodedPath

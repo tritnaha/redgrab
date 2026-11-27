@@ -1395,6 +1395,8 @@ class Library(private val ctx: Context) {
     }
 
     companion object {
+        /** Why a clip you chose not to download ("Don't save these") is set aside. */
+        const val SKIPPED = "Set aside by you"
         private val EDIT_RE = Regex(".+-edit-[0-9]+")
         private val UNSAFE_NAME = Regex("[^A-Za-z0-9_-]")
         /** Subfolder of the save folder that holds imported files. */

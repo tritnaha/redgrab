@@ -59,17 +59,46 @@ data class TagSuggestion(val text: String, val clips: Long)
 /**
  * What kinds of content to show. RedGifs labels clips and niches with an audience
  * ("sexuality"); these are its six labels. A clip is hidden when it carries a label that is
- * switched off. Clips without any label can't be judged and are shown.
+ * switched off, or when its tags say as much (not every clip is labelled, and other sites have
+ * no labels at all). With all six on nothing is filtered.
  */
 object ContentPrefs {
     val ALL = listOf("straight", "lesbian", "gay", "trans", "bisexual", "animated")
+    /** What is shown until you choose otherwise: everything except gay and trans. */
+    val DEFAULT = setOf("straight", "lesbian", "bisexual", "animated")
     fun label(v: String) = v.replaceFirstChar { it.uppercase() }
 
-    /** True when [labels] (of a clip or niche) pass with [allowed] switched on. */
-    fun allows(allowed: Set<String>, labels: List<String>): Boolean {
-        val known = labels.map { it.lowercase() }.filter { it in ALL }
-        return known.isEmpty() || known.all { it in allowed }
+    /** Words in tags, niches and titles that put a clip under a label, whatever the site labelled it. */
+    private val WORDS = mapOf(
+        "gay" to setOf("gay", "gays", "twink", "twinks", "yaoi"),
+        "trans" to setOf("trans", "transgender", "transexual", "transsexual", "transgirl", "transwoman", "tranny", "shemale", "shemales",
+            "tgirl", "tgirls", "ladyboy", "ladyboys", "femboy", "femboys", "sissy", "sissies", "crossdressing", "crossdresser", "futanari", "futa"),
+        "lesbian" to setOf("lesbian", "lesbians", "yuri"),
+        "bisexual" to setOf("bisexual"),
+        "animated" to setOf("animated", "animation", "hentai", "anime", "cartoon", "sfm", "rule34"),
+    )
+    private val BY_WORD: Map<String, String> = WORDS.flatMap { (label, words) -> words.map { it to label } }.toMap()
+    private val SPLIT = Regex("[^a-z0-9]+")
+
+    /** The labels that [texts] (tags, niche names, a title) point to. */
+    fun labelsIn(texts: Iterable<String>): Set<String> {
+        val out = HashSet<String>()
+        for (t in texts) for (w in t.lowercase().split(SPLIT)) BY_WORD[w]?.let { out += it }
+        return out
     }
+
+    /** True when nothing is filtered: every label is on. */
+    fun unfiltered(allowed: Set<String>) = allowed.containsAll(ALL)
+
+    /** True when something labelled [labels] and described by [texts] passes with [allowed] switched on. */
+    fun allows(allowed: Set<String>, labels: List<String>, texts: Iterable<String> = emptyList()): Boolean {
+        if (unfiltered(allowed)) return true
+        if (labels.any { l -> l.lowercase().let { it in ALL && it !in allowed } }) return false
+        return labelsIn(texts).all { it in allowed }
+    }
+
+    /** One line saying what is shown, for Settings. */
+    fun summary(allowed: Set<String>) = if (unfiltered(allowed)) "No filter" else ALL.filter { it in allowed }.joinToString(", ") { label(it) }.ifEmpty { "Nothing" }
 }
 
 /**
@@ -312,6 +341,40 @@ class RedGifsApi(private val token: String, private val userAgent: String,
     /** Follow or stop following a niche on your RedGifs account. */
     suspend fun followNiche(id: String, follow: Boolean) { send(if (follow) "POST" else "DELETE", "v2/niches/${enc(id)}/subscription") }
 
+    /** Every tag the site has, with how many clips carry it (one request, about 7,500 tags). */
+    suspend fun allTags(): List<Known> {
+        val arr = get("v1/tags").optJSONArray("tags") ?: return emptyList()
+        return (0 until arr.length()).mapNotNull { i ->
+            val o = arr.optJSONObject(i) ?: return@mapNotNull null
+            o.optString("name").trim().takeIf { it.isNotEmpty() }?.let { Known(it, o.optLong("count")) }
+        }
+    }
+
+    /** Every niche the site has (about 1,900, a hundred per request), most followed first. */
+    suspend fun allNiches(): List<Known> {
+        val out = ArrayList<Known>()
+        var page = 1
+        while (page <= 40) {
+            val pg = searchNiches("", null, NicheOrder.Subscribers, page, count = 100)
+            out += pg.niches.map { Known(it.name, it.subscribers, it.id, it.preferences) }
+            if (pg.niches.isEmpty() || page >= pg.pages) break
+            page++
+            kotlinx.coroutines.delay(150)
+        }
+        return out.distinctBy { it.id }
+    }
+
+    /** Creators whose name matches what has been typed. */
+    suspend fun suggestCreators(query: String): List<String> {
+        if (query.isBlank()) return emptyList()
+        val arr = JSONArray(getText("v1/tags/suggest?query=${enc(query.trim())}"))
+        return (0 until arr.length()).mapNotNull { i ->
+            val o = arr.optJSONObject(i) ?: return@mapNotNull null
+            if (o.optString("type") != "creator") return@mapNotNull null
+            o.optString("username").ifEmpty { o.optString("text").removePrefix("@") }.takeIf { it.isNotBlank() }
+        }
+    }
+
     /** Tags matching what has been typed so far, most used first. */
     suspend fun suggestTags(query: String): List<TagSuggestion> {
         if (query.isBlank()) return emptyList()
@@ -379,6 +442,15 @@ class RedGifsApi(private val token: String, private val userAgent: String,
         // The search endpoint calls "newest" `latest`.
         val o = if (order == OnlineOrder.New) "latest" else order.api
         return onlinePage("v2/gifs/search?type=g&count=${count.coerceIn(10, 100)}&page=$page&order=$o$q", page, extras)
+    }
+
+    /**
+     * Clips that carry every one of [tags]. Checked against the site (2026-11): "tags=a,b" returns
+     * only clips with both, where the free-text "query=a b" also returns clips with just one.
+     */
+    suspend fun tagClips(tags: List<String>, order: OnlineOrder, page: Int, extras: FeedExtras, count: Int = 40): OnlinePage {
+        val o = if (order == OnlineOrder.New) "latest" else order.api
+        return onlinePage("v2/gifs/search?type=g&count=${count.coerceIn(10, 100)}&page=$page&order=$o&tags=${tags.joinToString(",") { enc(it.trim()) }}", page, extras)
     }
 
     /** A creator's clips. */

@@ -176,6 +176,14 @@ sealed interface Feed {
         override val orders get() = OnlineOrder.entries
         override val numbered get() = true
     }
+    /** Clips that carry every one of [tags] (a search for words also returns clips with only some of them). */
+    data class Tags(val tags: List<String>) : Feed {
+        override val title get() = tags.joinToString(" + ") { "#$it" }
+        override val query get() = tags.joinToString(" ")
+        override val source get() = OnlineSource.RedGifs
+        override val orders get() = OnlineOrder.entries
+        override val numbered get() = true
+    }
     data class Niche(val id: String, val name: String) : Feed {
         override val title get() = name
         override val source get() = OnlineSource.RedGifs
@@ -326,7 +334,14 @@ data class DiscoverState(
     /** Subreddits the Reddit account has joined. */
     val subs: List<String> = emptyList(),
     val subsLoaded: Boolean = false,
+    /** Clips of this feed left out by the content filter so far. */
+    val hidden: Int = 0,
 )
+
+/** One line in the list under the Online search box: something that exists and what tapping it opens. */
+data class Suggestion(val kind: Kind, val label: String, val detail: String, val feed: Feed) {
+    enum class Kind(val word: String) { Tags("Every tag"), Tag("Tag"), Niche("Niche"), Creator("Creator"), Subreddit("Subreddit") }
+}
 
 class MainViewModel(app: Application) : AndroidViewModel(app) {
 
@@ -683,6 +698,24 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun clearDownloadQueue() = DownloadWorker.clear(getApplication())
+
+    /**
+     * "Don't save these": stops what is running, empties the queue, and sets aside every clip that
+     * isn't on the phone, so none of them is counted, downloaded or retried again. They stay in the
+     * library under "Removed", where "Check again" brings them back.
+     */
+    fun skipPending() {
+        val s = state.value
+        val ids = s.originals.filter { it.id !in s.saved && it.id !in s.dead }.map { it.id }
+        DownloadWorker.stop(getApplication())
+        DownloadWorker.clear(getApplication())
+        if (ids.isEmpty()) return
+        viewModelScope.launch(Dispatchers.IO) {
+            ids.forEach { library.markFailed(it, Library.SKIPPED, dead = true) }
+            AppLog.i("${ids.size} unsaved clip(s) set aside; they won't be downloaded")
+            withContext(Dispatchers.Main) { say("%,d set aside. Find them under Removed.".format(ids.size)) }
+        }
+    }
 
     fun download(id: String) = startDownload(listOf(id))
 
@@ -1089,7 +1122,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             recents = prefs.recent(feed.source.name)
         }
         discover = discover.copy(feed = feed, order = order, items = emptyList(), page = first - 1, cursor = null, firstPage = first,
-            pageStarts = emptyList(), pages = 0, hasMore = true, loading = false, error = null)
+            pageStarts = emptyList(), pages = 0, hasMore = true, loading = false, error = null, hidden = 0)
         loadMoreDiscover()
     }
 
@@ -1119,17 +1152,23 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     var contentPrefs by mutableStateOf(prefs.contentPrefs)
         private set
 
+    /** Whether [clip] passes the content filter: its RedGifs labels, and what its tags, niches and title say. */
+    fun allowed(clip: Clip): Boolean = ContentPrefs.allows(contentPrefs, clip.sexuality,
+        // A RedGifs clip has no title of its own; elsewhere the title is often all there is.
+        if (OnlineSource.of(clip.id) == OnlineSource.RedGifs) clip.tags + clip.niches + clip.nicheIds else clip.tags + clip.sources + clip.description)
+
     /**
-     * Sets which kinds of content the Online tab shows. Applied here to every RedGifs feed, and
-     * stored on your RedGifs account as the site's own "preferences" dialog does, so its feeds
-     * ("For you" above all) follow it too.
+     * Sets which kinds of content the Online tab shows (the same setting in Settings and behind the
+     * filter button). Applied here to every feed, search and suggestion of every site, and stored on
+     * your RedGifs account as the site's own "preferences" dialog does, so its feeds follow it too.
      */
     fun changeContentPrefs(allowed: Set<String>) {
         if (allowed == contentPrefs) return
         prefs.contentPrefs = allowed
         contentPrefs = prefs.contentPrefs
-        AppLog.i("Content preferences: ${contentPrefs.joinToString().ifEmpty { "none" }}")
-        if (discover.feed.source == OnlineSource.RedGifs) openFeed(discover.feed)
+        AppLog.i("Content filter: ${ContentPrefs.summary(contentPrefs)}")
+        suggest("")
+        if (discover.items.isNotEmpty() || discover.hidden > 0 || discover.error != null) openFeed(discover.feed)
         if (!prefs.signedIn) return
         viewModelScope.launch(Dispatchers.IO) {
             runCatching { withRedGifs(getApplication()) { it.setAccountPrefs(ContentPrefs.ALL.filter { p -> p in allowed }) } }
@@ -1184,7 +1223,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             val now = nicheBrowse ?: return@launch
             r.onSuccess { pg ->
                 // Niches for an audience you switched off are left out; unlabelled ones stay.
-                val shown = pg.niches.filter { ContentPrefs.allows(contentPrefs, it.preferences) }
+                val shown = pg.niches.filter { ContentPrefs.allows(contentPrefs, it.preferences, listOf(it.name)) }
                 val seen = now.items.mapTo(HashSet()) { it.id }
                 nicheBrowse = now.copy(items = now.items + shown.filter { it.id !in seen }, page = next, pages = pg.pages.coerceAtLeast(next), total = pg.total, loading = false)
                 withContext(Dispatchers.IO) { library.learnNiches(pg.niches.associate { it.id to it.name }) }
@@ -1232,38 +1271,98 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    // ---- suggestions while typing in the RedGifs search box -----------------------------------
+    // ---- suggestions while typing in the Online search box ------------------------------------
 
-    var tagSuggestions by mutableStateOf<List<TagSuggestion>>(emptyList())
-        private set
-    var nicheSuggestions by mutableStateOf<List<NicheInfo>>(emptyList())
-        private set
-    var subSuggestions by mutableStateOf<List<RedditApi.SubInfo>>(emptyList())
+    /** Every tag and niche on RedGifs, kept on the phone (see SearchIndex). */
+    private val searchIndex by lazy { SearchIndex(java.io.File(getApplication<Application>().filesDir, "search-index.tsv")) }
+    private var indexJob: kotlinx.coroutines.Job? = null
+
+    /** Reads the stored tag and niche lists, and fetches them again when they are missing or a week old. */
+    fun ensureSearchIndex() {
+        if (indexJob?.isActive == true || sfw) return
+        indexJob = viewModelScope.launch(Dispatchers.IO) {
+            searchIndex.load()
+            val fresh = searchIndex.ready && System.currentTimeMillis() - prefs.searchIndexAt < SearchIndex.MAX_AGE_MS
+            if (fresh || !prefs.signedIn || !isOnline()) return@launch
+            runCatching {
+                val tags = withRedGifs(getApplication()) { it.allTags() }
+                // The tags alone already make suggestions work; the niches take about twenty requests more.
+                searchIndex.store(tags, emptyList())
+                val niches = runCatching { withRedGifs(getApplication()) { it.allNiches() } }
+                    .onFailure { AppLog.w("Niche list for suggestions not read: ${it.message}") }.getOrDefault(emptyList())
+                searchIndex.store(tags, niches)
+                if (tags.isNotEmpty()) prefs.searchIndexAt = System.currentTimeMillis()
+                AppLog.i("Search suggestions: ${searchIndex.tags.size} tags, ${searchIndex.niches.size} niches stored")
+            }.onFailure { AppLog.w("Tag list for suggestions not read: ${it.message}") }
+        }
+    }
+
+    /** The tags [query] is made of, when every word of it belongs to an existing tag; null otherwise (or before the tag list is on the phone). */
+    fun tagsIn(query: String): List<String>? = searchIndex.tagNames.takeIf { it.isNotEmpty() }?.let { Suggest.asTags(it, query, atLeast = 1) }
+
+    /**
+     * The feed for what was typed. On RedGifs, words that are all existing tags open the clips
+     * that carry exactly those tags; anything else is the site's text search, which is loose
+     * ("gay" also finds "Age Gap" and "Gagged") and doesn't need every word to be there.
+     */
+    fun feedFor(source: OnlineSource, text: String): Feed {
+        if (source == OnlineSource.RedGifs) tagsIn(text)?.let { return Feed.Tags(it) }
+        return Feed.fromQuery(source, text)
+    }
+
+    var suggestions by mutableStateOf<List<Suggestion>>(emptyList())
         private set
     private var suggestJob: kotlinx.coroutines.Job? = null
 
-    /** Looks up tags and niches matching what has been typed (after a short pause in typing). */
+    /**
+     * Fills the list under the search box with things that exist and match what has been typed.
+     * Tags and niches come from the lists kept on the phone, at once; creators and subreddits are
+     * asked for after a short pause in typing.
+     */
     fun suggest(text: String) {
         suggestJob?.cancel()
-        val q = text.trim()
+        val q = Suggest.norm(text)
         val site = discover.feed.source
         val redGifs = (site == OnlineSource.RedGifs || site == OnlineSource.All) && prefs.signedIn
         val reddit = (site == OnlineSource.Reddit || site == OnlineSource.All) && !prefs.redditClientId.isNullOrBlank()
-        if (q.length < 2 || sfw || (!redGifs && !reddit)) { tagSuggestions = emptyList(); nicheSuggestions = emptyList(); subSuggestions = emptyList(); return }
+        if (q.length < 2 || sfw || (!redGifs && !reddit)) { suggestions = emptyList(); return }
+        val ok = { k: Known -> ContentPrefs.allows(contentPrefs, k.labels, listOf(k.name)) }
+        val local = if (!redGifs || !searchIndex.ready) emptyList() else {
+            val tags = searchIndex.tags
+            Suggest.combos(searchIndex.tagNames, tags, q, 3).filter { c -> ContentPrefs.allows(contentPrefs, emptyList(), c) }
+                .map { Suggestion(Suggestion.Kind.Tags, it.joinToString(" + "), "", Feed.Tags(it)) } +
+                Suggest.rank(tags.filter(ok), q, 6).map {
+                    Suggestion(Suggestion.Kind.Tag, it.name, Format.count(it.count), if (site == OnlineSource.All) Feed.AllSites(it.name) else Feed.Tags(listOf(it.name)))
+                } +
+                Suggest.rank(searchIndex.niches.filter(ok), q, 4).map { Suggestion(Suggestion.Kind.Niche, it.name, Format.count(it.count), Feed.Niche(it.id, it.name)) }
+        }
+        suggestions = local
         suggestJob = viewModelScope.launch {
             kotlinx.coroutines.delay(350)
-            // Reddit's counterpart of a niche is a subreddit.
-            if (reddit) subSuggestions = withContext(Dispatchers.IO) {
-                runCatching { RedditApi(prefs, RedGifsApi.clientFor(getApplication<Application>().userAgent)).searchSubreddits(q) }
-                    .onFailure { AppLog.w("Subreddit search failed: ${it.message}") }.getOrDefault(emptyList()).take(10)
-            } else subSuggestions = emptyList()
-            if (!redGifs) { tagSuggestions = emptyList(); nicheSuggestions = emptyList(); return@launch }
-            val (tags, niches) = withContext(Dispatchers.IO) {
-                val t = runCatching { withRedGifs(getApplication()) { it.suggestTags(q) } }.getOrDefault(emptyList())
-                val n = runCatching { withRedGifs(getApplication()) { it.searchNiches(q, null, NicheOrder.Match, 1, count = 10).niches } }.getOrDefault(emptyList())
-                t.take(10) to n.filter { ContentPrefs.allows(contentPrefs, it.preferences) }.take(6)
+            val live = withContext(Dispatchers.IO) {
+                val out = ArrayList<Suggestion>()
+                if (redGifs) {
+                    // Until the lists are on the phone, the site is asked instead.
+                    if (!searchIndex.ready) {
+                        runCatching { withRedGifs(getApplication()) { it.suggestTags(q) } }.getOrDefault(emptyList())
+                            .filter { ContentPrefs.allows(contentPrefs, emptyList(), listOf(it.text)) }.take(6)
+                            .forEach { out += Suggestion(Suggestion.Kind.Tag, it.text, Format.count(it.clips), if (site == OnlineSource.All) Feed.AllSites(it.text) else Feed.Search(it.text)) }
+                        runCatching { withRedGifs(getApplication()) { it.searchNiches(q, null, NicheOrder.Match, 1, count = 10).niches } }.getOrDefault(emptyList())
+                            .filter { ContentPrefs.allows(contentPrefs, it.preferences, listOf(it.name)) }.take(4)
+                            .forEach { out += Suggestion(Suggestion.Kind.Niche, it.name, Format.count(it.subscribers), Feed.Niche(it.id, it.name)) }
+                    }
+                    runCatching { withRedGifs(getApplication()) { it.suggestCreators(q) } }.getOrDefault(emptyList())
+                        .filter { ContentPrefs.allows(contentPrefs, emptyList(), listOf(it)) }.take(3)
+                        .forEach { out += Suggestion(Suggestion.Kind.Creator, "@$it", "", Feed.Performer(it)) }
+                }
+                // Reddit's counterpart of a niche is a subreddit.
+                if (reddit) runCatching { RedditApi(prefs, RedGifsApi.clientFor(getApplication<Application>().userAgent)).searchSubreddits(q) }
+                    .onFailure { AppLog.w("Subreddit search failed: ${it.message}") }.getOrDefault(emptyList())
+                    .filter { ContentPrefs.allows(contentPrefs, emptyList(), listOf(it.name)) }.take(4)
+                    .forEach { out += Suggestion(Suggestion.Kind.Subreddit, "r/${it.name}", Format.count(it.subscribers), Feed.Subreddit(it.name)) }
+                out
             }
-            tagSuggestions = tags; nicheSuggestions = niches
+            suggestions = local + live
         }
     }
 
@@ -1321,7 +1420,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Searches [source] for [query] (on Reddit: opens that subreddit; on FikFap: that hashtag). */
     fun searchOnline(query: String, source: OnlineSource = discover.feed.source) {
         player = null
-        openFeed(Feed.fromQuery(source, query))
+        openFeed(feedFor(source, query))
         discoverRequests++
     }
 
@@ -1373,10 +1472,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             }
             result.onSuccess { pg ->
                 val seen = discover.items.mapTo(HashSet()) { it.id }
-                // Content preferences: RedGifs clips labelled for an audience you switched off are left out.
-                val wanted = pg.clips.filter { OnlineSource.of(it.id) != OnlineSource.RedGifs || ContentPrefs.allows(contentPrefs, it.sexuality) }
+                // The content filter: clips labelled or tagged for an audience you switched off are left out, on every site.
+                val wanted = pg.clips.filter(::allowed)
                 val fresh = wanted.filter { it.id !in seen }
-                discover = discover.copy(items = discover.items + fresh, page = next, cursor = pg.cursor,
+                discover = discover.copy(items = discover.items + fresh, page = next, cursor = pg.cursor, hidden = discover.hidden + pg.clips.size - wanted.size,
                     // A page that added nothing isn't a place you can be.
                     pageStarts = if (fresh.isEmpty()) discover.pageStarts else discover.pageStarts + discover.items.size,
                     pages = if (pg.pages > 0) pg.pages else discover.pages,
@@ -1423,7 +1522,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     val parts = NicheMix.plan(next, followed.map { "n:" + it.id } + tags.map { "t:$it" }).map { (key, p) ->
                         try {
                             if (key.startsWith("n:")) api.nicheClips(key.drop(2), OnlineOrder.Trending, p, x, count = NicheMix.PER_NICHE)
-                            else api.searchClips(key.drop(2), OnlineOrder.Trending, p, x, count = NicheMix.PER_NICHE)
+                            // A followed tag that exists is asked for exactly; followed words go through the text search.
+                            else searchIndex.tagNames[Suggest.norm(key.drop(2))]?.let { api.tagClips(listOf(it), OnlineOrder.Trending, p, x, count = NicheMix.PER_NICHE) }
+                                ?: api.searchClips(key.drop(2), OnlineOrder.Trending, p, x, count = NicheMix.PER_NICHE)
                         } catch (e: HttpException) { AppLog.w("My feed: $key page $p: ${e.message}"); null }
                     }
                     OnlinePage(NicheMix.interleave(parts.map { it?.clips ?: emptyList() }), next, 0, more = parts.any { it != null && it.hasMore })
@@ -1431,6 +1532,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             }
             is Feed.ForYou -> redgifs { api, x -> api.forYou(next, x) }
             is Feed.Search -> redgifs { api, x -> api.searchClips(f.query, d.order, next, x) }
+            is Feed.Tags -> redgifs { api, x -> api.tagClips(f.tags, d.order, next, x) }
             is Feed.Niche -> redgifs { api, x -> api.nicheClips(f.id, d.order, next, x) }
             is Feed.Performer -> redgifs { api, x -> api.performerClips(f.name, d.order, next, x) }
             is Feed.Related -> redgifs { api, x -> api.relatedClips(f.clipId, next, x) }

@@ -131,7 +131,12 @@ class ScreenshotsTest {
             folderUri = Uri.parse("content://com.android.externalstorage.documents/tree/primary%3AMovies%2FRedGrab")
             folderLabel = "Movies/RedGrab"
             lastSeenBuild = BuildConfig.VERSION_CODE
+            searchIndexAt = System.currentTimeMillis()              // the lists below count as fresh: nothing is fetched
         }
+        // What the search box suggests from: a few tags and niches, in the form the app stores RedGifs' lists.
+        File(app.filesDir, "search-index.tsv").writeText(
+            "T\tDancing\t140000\nT\tSunset\t90000\nT\tSunrise\t40000\nT\tNight Sky\t30000\nT\tGay\t700000\n" +
+                "N\tslow-dance\tSlow Dance\t637380\tstraight,lesbian\nN\tsun-seekers\tSun Seekers\t1200\tstraight\n")
         val mine = (0 until 18).map { i ->
             sample(i, "sample", if (i % 4 == 3) setOf("Favourites") else if (i % 5 == 4) setOf("Liked", "Landscapes") else setOf("Liked"))
         }
@@ -278,6 +283,40 @@ class ScreenshotsTest {
         await("All sites: night sky")
         Thread.sleep(8000)
         check(vm.discover.feed == Feed.AllSites("night sky")) { "All sites didn't stay open: ${vm.discover.feed}" }
+    }
+
+    /** The list under the search box: only things that exist, the filter applied, and a tap opens the exact tag. */
+    @Test fun searchSuggestsWhatExists() = withApp { scenario, vm, mine ->
+        scenario.onActivity { vm.changeSource(OnlineSource.RedGifs); vm.showOnline(feed(mine)) }
+        tab("Online")
+        await("For you")
+        Thread.sleep(3000) // the stored lists are read when the tab opens
+        scenario.onActivity { vm.suggest("dan") }
+        await("Dancing")
+        await("Slow Dance")
+        check(vm.suggestions.map { it.label } == listOf("Dancing", "Slow Dance")) { "suggestions for \"dan\": ${vm.suggestions}" }
+        // Several words: the ones that are tags stay, the last is completed.
+        scenario.onActivity { vm.suggest("sunset dan") }
+        await("Sunset + Dancing")
+        // "Gay" exists but is filtered out unless asked for.
+        scenario.onActivity { vm.suggest("ga") }
+        Thread.sleep(1500)
+        check(vm.suggestions.none { it.label == "Gay" }) { "a filtered tag was suggested: ${vm.suggestions}" }
+        scenario.onActivity { vm.changeContentPrefs(ContentPrefs.ALL.toSet()); vm.suggest("ga") }
+        await("Gay")
+        scenario.onActivity { vm.changeContentPrefs(ContentPrefs.DEFAULT); vm.suggest("sun") }
+        await("Sunset")
+        device.findObject(By.text("Sunset")).click()
+        Thread.sleep(2500)
+        check(vm.discover.feed == Feed.Tags(listOf("Sunset"))) { "tapping a tag opened ${vm.discover.feed}" }
+        check(vm.suggestions.isEmpty()) { "the list stayed open" }
+        // Typed words that are all tags open those tags; anything else is the site's text search.
+        check(vm.feedFor(OnlineSource.RedGifs, "night sky sunset") == Feed.Tags(listOf("Night Sky", "Sunset")))
+        check(vm.feedFor(OnlineSource.RedGifs, "night sky over water") == Feed.Search("night sky over water"))
+        // The filter button opens the same dialog as Settings.
+        device.findObject(By.desc("Filter: what to show")).click()
+        await("No filter")
+        device.pressBack()
     }
 
     @Test fun whatsNew() = withApp { scenario, vm, _ ->
