@@ -349,7 +349,6 @@ class Library(private val ctx: Context) {
         copyOf = e.originalId, copyFile = e.file, copyNote = e.note,
     )
 
-    private fun recompose() { val clips = synchronized(lock) { compose() }; _state.update { it.copy(clips = clips) } }
 
     // ---- refresh -------------------------------------------------------------
 
@@ -1272,7 +1271,6 @@ class Library(private val ctx: Context) {
         _state.update { it.copy(duplicates = dups) }
     }
 
-    fun indexed(name: String): Pair<Long, String>? = synchronized(lock) { fileIndex[name] }
 
     private fun forgetFiles(names: kotlin.collections.Collection<String>) {
         if (names.none { it in fileIndex }) return

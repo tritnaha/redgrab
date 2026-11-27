@@ -76,7 +76,12 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            // -Pshrink removes code and resources the app never uses (most of the icon set, for one). Names are
+            // kept, so logs and crash reports stay readable. Off by default until a shrunk build has been used on a phone.
+            val shrink = project.hasProperty("shrink")
+            isMinifyEnabled = shrink
+            isShrinkResources = shrink
+            if (shrink) proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "shrink-rules.pro")
             signingConfig = signingConfigs.findByName("shared") ?: signingConfigs.getByName("debug")
         }
     }
@@ -101,10 +106,8 @@ dependencies {
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-extended")
-    implementation("androidx.compose.ui:ui-tooling-preview")
 
     implementation("androidx.core:core-ktx:1.16.0")
-    implementation("androidx.appcompat:appcompat:1.7.1")
     implementation("androidx.activity:activity-compose:1.12.3")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.10.0")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.10.0")

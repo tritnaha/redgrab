@@ -23,7 +23,6 @@ class HttpException(val code: Int, msg: String,
 class VerificationRequiredException(val subject: String) : IOException("RedGifs asks for a quick human check")
 
 data class RgCollection(val id: String, val name: String, val count: Int = 0, val thumb: String? = null) {
-    fun toJson() = JSONObject().put("id", id).put("name", name).put("count", count).put("thumb", thumb)
     companion object {
         fun fromJson(j: JSONObject) = RgCollection(j.getString("id"), j.optString("name"), j.optInt("count"),
             j.optString("thumb").takeIf { it.startsWith("http") })
@@ -32,7 +31,6 @@ data class RgCollection(val id: String, val name: String, val count: Int = 0, va
 
 /** A creator profile as returned alongside clips ("users" in feed responses). */
 data class Performer(val username: String, val name: String, val verified: Boolean, val followers: Long, val avatar: String?) {
-    fun toJson() = JSONObject().put("u", username).put("n", name).put("v", verified).put("f", followers).put("a", avatar)
     companion object {
         fun fromJson(j: JSONObject) = Performer(j.getString("u"), j.optString("n"), j.optBoolean("v"), j.optLong("f"),
             j.optString("a").takeIf { it.startsWith("http") })

@@ -109,6 +109,7 @@ Needs JDK 17 or later and the Android SDK (platform 37).
 - The APK lands in `app/build/outputs/apk/`.
 - A release build is signed with `signing/release.keystore` if that file exists, otherwise with the local debug key. The key is not in the repository.
 - `-PsideBySide` builds a separate "RedGrab test" app that installs next to the normal one.
+- `-Pshrink` removes unused code and resources from a release build (about 3.6 MB instead of 18 MB). Off by default; names are not obfuscated.
 
 ### Tests
 

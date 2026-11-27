@@ -846,7 +846,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun openCollection(key: String) = browse(Facet(Facet.Kind.Collection, key))
 
     fun changeAutoSyncHours(h: Int) { prefs.autoSyncHours = h; autoSyncHours = h; SyncWorker.schedule(getApplication()) }
-    fun changeSyncWifiOnly(v: Boolean) { prefs.syncWifiOnly = v; syncWifiOnly = v; SyncWorker.schedule(getApplication()) }
 
     fun clearPartials() {
         viewModelScope.launch(Dispatchers.IO) {
@@ -1722,7 +1721,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun changeHd(v: Boolean) { prefs.hd = v; hd = v }
     fun changeIncludeCollections(v: Boolean) { prefs.includeCollections = v; includeCollections = v }
     var appLock by mutableStateOf(prefs.appLock)
         private set
@@ -1747,12 +1745,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun dismissCrash() { lastCrash = null }
 
-    /** document URI of a saved clip, for opening it in a video player. */
-    suspend fun savedFileUri(id: String): Uri? = withContext(Dispatchers.IO) {
-        library.folder()?.findFile("$id.mp4")?.uri
-    }
-
-    /** Re-reads the save folder, then tidies it: stale partials out, missing thumbnails in. */
     /**
      * Housekeeping after the folder may have changed. Listing the whole save folder is slow with
      * many files, so on an ordinary start ([force] off) it is skipped when it was done in the last
