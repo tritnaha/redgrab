@@ -84,8 +84,7 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
 
-      # The release must survive being installed over the last one. The behaviour tests (place kept across
-      # tabs, Back, the grid following the clip view, the screens opening) run too but don't block yet.
+      # The release must survive being installed over the last one.
       - name: Update test on an emulator
         if: steps.version.outputs.work == 'true'
         uses: reactivecircus/android-emulator-runner@v2
@@ -96,10 +95,7 @@ jobs:
           profile: pixel_6
           disable-animations: true
           emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
-          script: |
-            bash .github/scripts/upgrade-smoke.sh app/build/outputs/apk/release/app-release.apk
-            adb uninstall app.redgrab || true
-            ./gradlew --no-daemon connectedDebugAndroidTest || echo "::warning::Behaviour tests failed (they don't block the release yet)"
+          script: bash .github/scripts/upgrade-smoke.sh app/build/outputs/apk/release/app-release.apk
 
       - name: Publish
         if: steps.version.outputs.published == 'false'
@@ -114,3 +110,19 @@ jobs:
           if [ ! -s notes.md ]; then echo "::error::CHANGELOG.md has no entry for version $NAME"; exit 1; fi
           printf '\n[All changes](https://github.com/%s/blob/%s/CHANGELOG.md)\n' "$GITHUB_REPOSITORY" "$GITHUB_SHA" >> notes.md
           gh release create "v$NAME" "$apk" --title "RedGrab $NAME" --notes-file notes.md --target "$GITHUB_SHA"
+
+      # The on-device behaviour tests (place kept across tabs, Back, the grid following the clip view, the
+      # screens opening). They run after publishing and can't hold a release up: a failure only shows here.
+      - name: Behaviour tests on an emulator
+        if: steps.version.outputs.work == 'true'
+        continue-on-error: true
+        timeout-minutes: 25
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          arch: x86_64
+          target: default
+          profile: pixel_6
+          disable-animations: true
+          emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
+          script: ./gradlew --no-daemon connectedDebugAndroidTest
