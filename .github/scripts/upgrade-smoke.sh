@@ -21,6 +21,8 @@ start() { # start <seconds to wait> <what this is>
     exit 1
   fi
   if ! adb shell pidof "$PKG" > /dev/null; then
+    # Why it went: the app's own log lines, and what the system says about the process.
+    adb logcat -d | grep -E "RedGrab|AndroidRuntime|$PKG|ActivityManager.*(died|Killing|ANR|Force stopping)|lowmemorykiller|libc.*Fatal" | tail -120
     echo "::error::$2 is not running after it was started"
     exit 1
   fi
@@ -35,7 +37,8 @@ if gh release download --pattern '*.apk' --dir prev 2> /dev/null && ls prev/*.ap
   adb install "$old" > /dev/null
   start 20 "the last release"
   adb shell am force-stop "$PKG"
-  adb install -r "$NEW" > /dev/null
+  adb install -r "$NEW"
+  adb shell dumpsys package "$PKG" | grep -m2 -E "versionName|versionCode" || true
   start 25 "this build, updated from the last release"
   adb shell am force-stop "$PKG"
   start 15 "this build, started a second time"
