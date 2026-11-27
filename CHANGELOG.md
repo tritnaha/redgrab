@@ -6,6 +6,20 @@ time it opens after an update, and the whole list under Settings → About → W
 Each version has the sections it needs out of Added, Changed and Fixed, one line per change,
 and a link to the code that made it.
 
+## 13.14 (build 27) · 2026-11-27
+
+### Added
+- Follow things on sites that have no following of their own: FikFap hashtags, sex.com and EroMe searches, 4chan boards and searches. They show in a "Following" row.
+- All sites, with nothing typed, is your feed across the sites: RedGifs niches and tags, Reddit's front page, and what you follow elsewhere.
+- sex.com lists its most liked GIFs without a search. EroMe opens on its Hot and New lists. 4chan has a row of boards.
+
+### Changed
+- Inside the app: settings storage and the two largest code files were reorganised. Nothing should behave differently.
+- The first in-app update asks once, through Android, to allow RedGrab to install apps. After that, updates install on a tap.
+
+### Fixed
+- Release checks: the app's own updater is now run end to end on an emulator (older version finds, downloads and installs the new one).
+
 ## 13.13 (build 26) · 2026-11-27
 
 ### Changed
@@ -13,6 +27,8 @@ and a link to the code that made it.
 - Needs Android 16 or later. Code for older versions is removed.
 - Answers from sites are limited in size (16 MB of text, 4 GB per stream), so a broken site can't fill memory or storage.
 - Release builds: every workflow action is pinned to an exact commit; the signing key's password can be a secret.
+
+[Details](https://github.com/tritnaha/redgrab/commit/6d9a1c3)
 
 ## 13.12 (build 25) · 2026-11-27
 

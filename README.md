@@ -37,13 +37,13 @@ Taken on an emulator with made-up clips. The thumbnails are drawn by the screens
 
 | Source | Browse by | Needs |
 | --- | --- | --- |
-| All sites | one feed across every site set up, one search | whatever each site needs |
+| All sites | your feed across every site (what you follow on each), one search | whatever each site needs |
 | RedGifs | My feed (followed niches and tags), For you, search with suggestions, exact tags, niche browser, creator, related | RedGifs sign-in |
-| Reddit | front page, subreddit, user, your saved/upvoted | your own client ID |
-| FikFap | hashtag, user | nothing |
-| sex.com | GIF search | nothing |
-| EroMe | search, user | nothing |
-| 4chan | `/gif/` threads | nothing |
+| Reddit | front page, subreddit (with suggestions), user, your saved/upvoted | a client ID |
+| FikFap | hashtag, user; followed hashtags | nothing |
+| sex.com | most liked GIFs, GIF search; followed searches | nothing |
+| EroMe | Hot, New, search, user; followed searches | nothing |
+| 4chan | boards, threads, thread search; followed searches | nothing |
 
 Search suggests only tags, niches, creators and subreddits that exist. RedGifs' tag and niche lists are cached on the phone.
 
@@ -60,7 +60,7 @@ A content filter (straight, lesbian, gay, trans, bisexual, animated) applies to 
 - Share to WhatsApp
 - SFW mode (blurs previews, blocks playback)
 - App lock using the phone's fingerprint, face, PIN, pattern or password
-- Updates itself from this repository's releases
+- Updates itself from this repository's releases (Android asks once to allow it)
 - Changelog shown after each update
 
 ## Install
@@ -163,6 +163,7 @@ Pushing a new `versionName` in `app/build.gradle.kts` runs `.github/workflows/re
 - Release notes come from the version's section in [`CHANGELOG.md`](CHANGELOG.md). The build fails if the current version has no entry.
 - Before publishing, the last release is installed on an emulator and updated to the new build; the app has to start. The on-device tests run beside it.
 - After publishing, the release before is installed on an emulator and has to update itself through the app's own updater. "Run workflow" with `updater` ticked runs only that.
+- The on-device tests' screenshots are pushed to the branch `ci-screenshots`; the pictures above are copied from there.
 
 ## Project layout
 
@@ -172,7 +173,8 @@ Pushing a new `versionName` in `app/build.gradle.kts` runs `.github/workflows/re
 | `.../ui/` | Compose screens |
 | `.../RedGifsApi.kt`, `Sources.kt`, `MoreSources.kt` | Site clients |
 | `.../DownloadWorker.kt`, `SyncWorker.kt` | Background downloads and sync |
-| `.../Library.kt`, `Db.kt` | Library state and database |
+| `.../Library.kt`, `Lib*.kt`, `Clip.kt`, `Db.kt` | Library state (by topic) and database |
+| `.../MainViewModel.kt`, `Vm*.kt`, `Feed.kt` | Screen state, and its functions by topic |
 | `.../Updater.kt`, `Changelog.kt` | Updates and changelog |
 | `.../SearchIndex.kt` | Cached tag and niche lists, suggestion matching |
 | `.../SecretStore.kt`, `AppLock.kt` | Token storage and app lock |
@@ -182,7 +184,8 @@ Built with Kotlin, Jetpack Compose, Media3, Room, WorkManager, OkHttp and Coil.
 
 ## Known limits
 
-- Clients for Reddit, FikFap, sex.com, EroMe and 4chan are written from open-source extractor code and have not been tested against the live sites from the build environment.
+- Clients for Reddit, FikFap, sex.com, EroMe and 4chan are written from open-source extractor code and public API documentation and have not been run against the live sites from the build environment. EroMe's Hot/New lists and 4chan's board list are not in any extractor.
+- Following on sites other than RedGifs and Reddit is kept in the app, not on the site.
 - Reddit-hosted videos are saved without sound.
 - 4chan clips are mostly WebM, which some apps won't play or accept.
 - FikFap streams can't be resumed part-way.

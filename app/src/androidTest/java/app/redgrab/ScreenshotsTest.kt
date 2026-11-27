@@ -232,6 +232,9 @@ class ScreenshotsTest {
         Thread.sleep(3000)
         scenario.onActivity { vm.showOnline(feed(mine)); vm.suggest("sun") }
         await("Sunset")
+        // Creators are looked up on the site; the picture shows only the made-up tags and niches.
+        Thread.sleep(4000)
+        scenario.onActivity { vm.suggestions = vm.suggestions.filter { it.kind != Suggestion.Kind.Creator && it.kind != Suggestion.Kind.Subreddit } }
         shot("v13-search")
     }
 
