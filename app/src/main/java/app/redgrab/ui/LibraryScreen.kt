@@ -369,7 +369,7 @@ fun LibraryScreen(vm: MainViewModel, snack: SnackbarHostState, onSignIn: () -> U
                 if (s.clips.isNotEmpty()) {
                     item(span = StaggeredGridItemSpan.FullLine) {
                         // One slim row: the tag/performer you're browsing (if any), then the filters.
-                        CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides 40.dp) {
+                        CompactTouch {
                             Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically,
                                 modifier = Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = m.head)) {
                                 vm.facet?.let { f ->
