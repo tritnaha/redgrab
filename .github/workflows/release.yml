@@ -13,6 +13,7 @@
 #              build, and has to start (.github/scripts/upgrade-smoke.sh)
 #   publish    may write releases; publishes exactly the APK the build job made
 #   behaviour  no secrets: the on-device tests (.github/scripts/behaviour-tests.sh); can't hold a release up
+#   screenshots may write: pushes the pictures the on-device tests took to the branch ci-screenshots
 #   updater    no secrets: after publishing, the release before is installed and has to update
 #              itself through the app's own updater (.github/scripts/updater-e2e.sh); can't hold a release up
 #
@@ -242,6 +243,36 @@ jobs:
           retention-days: 7
           if-no-files-found: ignore
           path: shots/
+
+  # Puts the screenshots the on-device tests took on the branch ci-screenshots (replaced each time),
+  # from where they are copied into screenshots/ for the README. Its own job, because it needs to
+  # write to the repository and the emulator job must not be able to.
+  screenshots:
+    needs: [build, behaviour]
+    if: always() && needs.build.outputs.work == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    continue-on-error: true
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: screenshots
+          path: shots
+      - name: Push them to ci-screenshots
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir out && cd out
+          # Pictures only, whatever else the artifact holds.
+          find ../shots -name '*.png' -exec cp {} . \;
+          ls -la
+          test -n "$(ls *.png 2> /dev/null)"
+          git init -q -b ci-screenshots
+          git add -- *.png
+          git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" commit -q -m "Screenshots from run $GITHUB_RUN_ID ($GITHUB_SHA)"
+          git push -q -f "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" ci-screenshots
 
   # The app's own updater, end to end: the release before the latest is installed and has to find,
   # download and install the latest by itself. Depends on GitHub answering the emulator without a
