@@ -20,6 +20,11 @@
 # on GitHub's standard Linux runner unless the repository variable EMULATOR_RUNNER names another
 # one: the label of a self-hosted runner with KVM, or of a larger GitHub runner.
 #
+# Don't push to the branch while a release run is going: GitHub then refuses to create the release
+# ("Resource not accessible by integration") because its commit is no longer the head of a branch
+# and differs from it in workflow files. That is what kept 13.9 from being published, and 13.12 at
+# the first attempt.
+#
 # "Run workflow" with "smoke" ticked builds and tests without publishing anything; with "updater"
 # ticked it runs the in-app update test against the two latest releases.
 name: Release
@@ -95,8 +100,17 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
-          # Keeps Gradle's downloads between runs.
-          cache: gradle
+
+      # Gradle's downloads and its build cache, carried from the most recent run. (A cache keyed on the
+      # build files would be thrown away by every version bump.)
+      - uses: actions/cache@v4
+        if: steps.version.outputs.work == 'true'
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ github.sha }}
+          restore-keys: gradle-${{ runner.os }}-
 
       - name: Build
         if: steps.version.outputs.work == 'true'
@@ -108,7 +122,7 @@ jobs:
           REDDIT_CLIENT_ID: ${{ vars.REDDIT_CLIENT_ID }}
         run: |
           echo "sdk.dir=$ANDROID_HOME" > local.properties
-          ./gradlew --no-daemon testDebugUnitTest assembleRelease assembleDebug assembleDebugAndroidTest
+          ./gradlew --no-daemon --build-cache testDebugUnitTest assembleRelease assembleDebug assembleDebugAndroidTest
 
       - name: Remove the signing key
         if: always()
