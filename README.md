@@ -67,7 +67,7 @@ A content filter (straight, lesbian, gay, trans, bisexual, animated) applies to 
 
 1. Download the latest `RedGrab-<version>-<build>.apk` from [Releases](https://github.com/tritnaha/redgrab/releases).
 2. Open it and allow installing from that source.
-3. Choose a save folder in Settings.
+3. Clips are kept inside the app. A visible save folder can be chosen in Settings instead.
 4. Sign in to RedGifs under Settings → Account. You sign in on the site's own page inside the app.
 
 Requires Android 16 or later.
@@ -91,7 +91,8 @@ Reddit needs a client ID, unless the build carries one (`-PredditClientId=…`, 
 - No analytics, no ads, no servers of its own. The app talks only to the sites you browse and to GitHub for updates.
 - Notifications never name a site or a clip and stay off the lock screen.
 - The activity log stays inside the app; copies and reports have sign-ins removed.
-- Saved clips are ordinary files in the folder you choose. The app lock covers the app, not that folder.
+- Clips can be kept inside the app's own storage, which no gallery, file browser or USB connection can list (the default for new installs; Settings → Save folder → "Keep inside the app" moves an existing folder in). "Export all" writes plain files out again. Android offers to keep the app's data on uninstall.
+- With a save folder instead, clips are ordinary files there, and the app lock covers the app, not that folder.
 - The built-in browser's cookies are stored like any browser's and are removed when you sign out.
 
 ## Build
@@ -178,6 +179,7 @@ Pushing a new `versionName` in `app/build.gradle.kts` runs `.github/workflows/re
 | `.../Updater.kt`, `Changelog.kt` | Updates and changelog |
 | `.../SearchIndex.kt` | Cached tag and niche lists, suggestion matching |
 | `.../SecretStore.kt`, `AppLock.kt` | Token storage and app lock |
+| `.../PrivateDocs.kt` | Clips kept inside the app |
 | `app/src/test/` | Unit tests |
 
 Built with Kotlin, Jetpack Compose, Media3, Room, WorkManager, OkHttp and Coil.
