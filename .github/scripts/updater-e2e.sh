@@ -31,7 +31,8 @@ echo "Installing $old; it should update itself to $new (build $want)"
 
 build() { adb shell dumpsys package "$PKG" | sed -n 's/.*versionCode=\([0-9]*\).*/\1/p' | head -1; }
 # The app's scheduled background work, as "<namespace:> <job id>" (the namespace is empty before Android 14).
-jobs_of() { adb shell dumpsys jobscheduler | tr -d '\r' | sed -n "s/^ *JOB \([^#]*\)#u[0-9a-z]*\/\([0-9]*\): .*$PKG\/.*/\1 \2/p" | sort -u; }
+# Android 16 prints "JOB androidx.work.systemjobscheduler:u0a216/1: ..."; older versions "JOB #u0a216/1: ...".
+jobs_of() { adb shell dumpsys jobscheduler | tr -d '\r' | sed -n "s/^ *JOB \([^ #]*:\)\{0,1\}#\{0,1\}u[0-9a-z]*\/\([0-9]*\): .*$PKG\/.*/\1 \2/p" | sort -u; }
 run_jobs() {
   jobs_of | while read -r a b; do
     if [ -z "${b:-}" ]; then adb shell cmd jobscheduler run -f "$PKG" "$a" > /dev/null 2>&1 || true
@@ -61,6 +62,9 @@ on_screen() { adb shell uiautomator dump /sdcard/ui.xml > /dev/null 2>&1; adb sh
 
 adb uninstall "$PKG" > /dev/null 2>&1 || true
 adb install -g "$(ls e2e/old/*.apk | head -1)" > /dev/null
+# Android asks once whether this app may install apps ("Install unknown apps"); on a phone you
+# answer that the first time. Here it is answered beforehand.
+adb shell appops set "$PKG" REQUEST_INSTALL_PACKAGES allow
 echo "Installed build $(build); installer of record: $(adb shell pm list packages -i "$PKG" | tr -d '\r')"
 adb logcat -c
 adb shell am start -W -n "$PKG/.MainActivity" > /dev/null
