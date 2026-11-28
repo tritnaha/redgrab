@@ -39,6 +39,7 @@ object AppLock {
     private var hiddenAt = 0L        // elapsedRealtime when the last screen went out of sight
     private var rebuilding = false   // the screen is only being rebuilt (the phone was turned)
     private var autoAsked = false
+    private var deferred = false     // a lock that fell due while a sign-in page was in front
     private var unlockedAt = -10_000L
     private var signal: CancellationSignal? = null
 
@@ -63,14 +64,18 @@ object AppLock {
         if (prefs.appLock && available(app)) locked = true
         app.registerActivityLifecycleCallbacks(object : Application.ActivityLifecycleCallbacks {
             override fun onActivityStarted(a: Activity) {
+                val signIn = a is LoginActivity || a is RedditLoginActivity || a is VerifyActivity
+                // A lock that was due while a sign-in page was open applies now that the app itself is back.
+                if (deferred && !signIn) { deferred = false; if (!locked) { locked = true; autoAsked = false; AppLog.i("App locked") } }
                 if (visible++ > 0) return
                 if (rebuilding) { rebuilding = false; return }
                 val now = SystemClock.elapsedRealtime()
                 val on = prefs.appLock && available(a)
                 if (!locked && shouldLock(on, if (shownBefore) now - hiddenAt else -1, prefs.appLockAfterSec, now - unlockedAt)) {
-                    locked = true
-                    autoAsked = false
-                    AppLog.i("App locked")
+                    // Signing in means leaving for a moment (a code by e-mail, a password manager). A sign-in page shows
+                    // none of your clips, so it stays open; the lock comes down when you return to the app.
+                    if (signIn) deferred = true
+                    else { locked = true; autoAsked = false; AppLog.i("App locked") }
                 }
                 shownBefore = true
             }

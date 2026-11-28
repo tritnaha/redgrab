@@ -192,6 +192,8 @@ class LoginActivity : ComponentActivity() {
 
             override fun onPageStarted(view: WebView, url: String?, favicon: android.graphics.Bitmap?) {
                 pageHost = runCatching { android.net.Uri.parse(url).host }.getOrNull().orEmpty()
+                // A form can lead elsewhere without being asked about above: such a page is stopped and the sign-in page comes back.
+                if (url != null && url.startsWith("http") && !isRedgifs(url)) { view.stopLoading(); if (view.canGoBack()) view.goBack() }
                 onRedgifs = isRedgifs(url)
                 if (!onRedgifs) seenToken = null // a token seen earlier doesn't carry over to another site
             }

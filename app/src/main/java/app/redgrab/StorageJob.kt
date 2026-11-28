@@ -64,6 +64,8 @@ class StorageWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ct
         val kind = parts[0]
         val folder = runCatching { Uri.parse(parts[1]) }.getOrNull() ?: return done("")
         val label = parts.getOrElse(2) { "" }
+        // Never at the same time as a download: one would write where the other is taking files from.
+        if (DownloadWorker.active) { StorageJob.status.value = "Waiting for the download"; return Result.retry() }
         runCatching { setForeground(info("")) }
         var shown = 0L
         val progress: (String) -> Unit = { p ->
@@ -89,14 +91,20 @@ class StorageWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ct
                         }
                     }
                 }
-                StorageJob.OUT -> {
-                    // Verified copies first (as an export), then the folder becomes the save folder, then the copies inside go.
-                    val (copied, failed) = lib.exportTo(folder, progress)
-                    if (failed > 0) "%,d copied, %,d couldn't be (see the log). Nothing was removed; run it again.".format(copied, failed)
-                    else {
-                        prefs.folderUri = folder; prefs.folderLabel = label.ifBlank { "Folder" }
-                        PrivateDocs.dir(applicationContext).listFiles()?.forEach { it.deleteRecursively() }
-                        "Clips are in the folder now. Other apps can see them there."
+                StorageJob.OUT -> when {
+                    // Cut short after the folder had already become the save folder: only the tidying is left.
+                    prefs.folderUri == folder -> outDone(lib.dropCopiesAlsoIn(folder))
+                    !PrivateDocs.isPrivate(prefs.folderUri) -> "The save folder changed meanwhile. Nothing was moved."
+                    else -> {
+                        // Checked copies first (as an export). What arrives while that runs is taken along in a second pass.
+                        val (c1, f1) = lib.exportTo(folder, progress)
+                        val (c2, f2) = if (f1 == 0) lib.exportTo(folder, progress) else 0 to 0
+                        if (f1 + f2 > 0) "%,d copied, %,d couldn't be (see the log). Nothing was removed; run it again.".format(c1 + c2, f1 + f2)
+                        else {
+                            // The folder becomes the save folder; then only files whose copy there is identical are removed from the app.
+                            prefs.folderUri = folder; prefs.folderLabel = label.ifBlank { "Folder" }
+                            outDone(lib.dropCopiesAlsoIn(folder))
+                        }
                     }
                 }
                 else -> {
@@ -112,13 +120,19 @@ class StorageWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ct
             AppLog.e("Storage work ($kind) failed", e)
             "Couldn't finish: ${e.message}. Nothing is lost."
         }
-        // An export or bring-in folder is let go of; a folder that became the save folder is kept.
-        if (prefs.folderUri != folder) runCatching {
+        // An export or bring-in folder is let go of; a folder that is (or holds) the save folder is kept.
+        val current = prefs.folderUri
+        val sameTree = current != null && current.authority == folder.authority &&
+            runCatching { android.provider.DocumentsContract.getTreeDocumentId(current) == android.provider.DocumentsContract.getTreeDocumentId(folder) }.getOrDefault(false)
+        if (current != folder && !sameTree) runCatching {
             applicationContext.contentResolver.releasePersistableUriPermission(folder,
                 android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
         }
         return done(message)
     }
+
+    private fun outDone(left: Int) = "Clips are in the folder now. Other apps can see them there." +
+        if (left > 0) " %,d file(s) saved meanwhile are still inside the app: use Export all.".format(left) else ""
 
     private fun done(message: String): Result {
         applicationContext.library.prefs.storageJob = null

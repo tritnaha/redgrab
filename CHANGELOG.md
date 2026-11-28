@@ -6,6 +6,24 @@ time it opens after an update, and the whole list under Settings → About → W
 Each version has the sections it needs out of Added, Changed and Fixed, one line per change,
 and a link to the code that made it.
 
+## 13.16 (build 29) · 2026-11-28
+
+### Added
+- Settings → Storage → "Use a visible folder": moves every clip back out to a folder you pick, checked copy by copy.
+- Android's "Clear storage" for RedGrab now opens a warning that asks twice, instead of deleting every clip in one tap.
+
+### Changed
+- Moving clips in or out and exporting run in the background with a notification. Closing the app doesn't stop them, and an unfinished one carries on.
+- Downloads wait while clips are being moved, and a move waits for a running download.
+- With the app lock on, the app can't be captured: no screenshots, screen recording or casting.
+- The app lock applies as soon as you leave the app (was after a minute). A sign-in page stays open while you fetch a code.
+- The RedGifs and Reddit sign-in pages only open pages of their own site.
+- 4chan, EroMe, sex.com and FikFap were run against the real sites for the first time; all their feeds, paging and files work.
+
+### Fixed
+- sex.com has no list without a search (the site refuses it); the "Popular" shortcut is gone.
+- A FikFap hashtag that doesn't exist showed an error instead of an empty list.
+
 ## 13.15 (build 28) · 2026-11-27
 
 ### Added
@@ -24,6 +42,8 @@ and a link to the code that made it.
 ### Fixed
 - "Overwrite original" on an imported clip put the edited file in the wrong place and lost the original.
 - Importing two files with the same name could write one over the other.
+
+[Details](https://github.com/tritnaha/redgrab/commit/9bd1c5c)
 
 ## 13.14 (build 27) · 2026-11-27
 

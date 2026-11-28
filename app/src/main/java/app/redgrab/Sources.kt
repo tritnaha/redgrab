@@ -193,7 +193,10 @@ class FikFapApi(private val http: OkHttpClient) {
         ))
     }
 
-    fun tagPosts(tag: String, afterId: String?, page: Int) = page(get("hashtags", "label", tag, "posts", params = mapOf("amount" to "$AMOUNT", "afterId" to afterId)), page)
+    /** A hashtag's posts. A hashtag the site doesn't have answers 404 (seen 2026-11): that is an empty list, not a fault. */
+    fun tagPosts(tag: String, afterId: String?, page: Int): OnlinePage = try {
+        page(get("hashtags", "label", tag, "posts", params = mapOf("amount" to "$AMOUNT", "afterId" to afterId)), page)
+    } catch (e: HttpException) { if (e.code == 404) OnlinePage(emptyList(), page, 0, more = false) else throw e }
 
     fun userPosts(user: String, afterId: String?, page: Int) = page(get("profile", "username", user, "posts", params = mapOf("amount" to "$AMOUNT", "afterId" to afterId)), page)
 

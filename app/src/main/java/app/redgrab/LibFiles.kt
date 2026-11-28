@@ -227,6 +227,7 @@ internal fun Library.adoptNewFiles(progress: (String) -> Unit): Int {
  * is kept.
  */
 fun Library.addOnlineFile(c: Clip, http: okhttp3.OkHttpClient, urls: List<String>, onProgress: (Long, Long) -> Unit = { _, _ -> }) {
+    if (prefs.storageJob != null) throw java.io.IOException("Clips are being moved. Try again when that is done.")
     require(Clip.validId(c.id)) { "Bad clip ID" }
     if (synchronized(lock) { imports.any { it.id == c.id } }) return
     val dir = importedDir(create = true) ?: error("Choose a save folder first")
@@ -473,7 +474,7 @@ internal suspend fun Library.tidyMovedFolder(from: Uri): Boolean = withContext(D
  * in [to] first, so galleries don't pick the copies up. A file already there under the same name is
  * replaced only once the new copy is complete. Returns (copied, failed).
  */
-suspend fun Library.exportTo(to: Uri, onProgress: (String) -> Unit): Pair<Int, Int> = withContext(Dispatchers.IO) {
+suspend fun Library.exportTo(to: Uri, onProgress: (String) -> Unit, verified: MutableList<String>? = null): Pair<Int, Int> = withContext(Dispatchers.IO) {
     val from = prefs.folderUri ?: return@withContext 0 to 0
     val resolver = ctx.contentResolver
     val root = DocumentFile.fromTreeUri(ctx, to) ?: error("Can't write to that folder")
@@ -496,13 +497,14 @@ suspend fun Library.exportTo(to: Uri, onProgress: (String) -> Unit): Pair<Int, I
             val there = dir.findFile(doc.name)
             if (there != null && there.isDirectory) error("a folder with this name is in the way")
             val sum = resolver.openInputStream(doc.uri)!!.use { sha256(it) }
-            if (there != null && resolver.openInputStream(there.uri)!!.use { sha256(it) } == sum) return@forEachIndexed // already exported
+            if (there != null && resolver.openInputStream(there.uri)!!.use { sha256(it) } == sum) { verified?.add(path); return@forEachIndexed } // already exported
             val out = (dir.createFile("application/octet-stream", doc.name + ".exporting") ?: error("Could not create ${doc.name}")).also { tmp = it }
             resolver.openInputStream(doc.uri)!!.use { input -> resolver.openOutputStream(out.uri, "wt")!!.use { input.copyTo(it, 256 * 1024) } }
             if (resolver.openInputStream(out.uri)!!.use { sha256(it) } != sum) error("the copy doesn't match")
             there?.delete()
             if (!out.renameTo(doc.name)) error("could not name the copy")
             tmp = null
+            verified?.add(path)
             copied++
         } catch (e: kotlinx.coroutines.CancellationException) {
             runCatching { tmp?.delete() }; throw e
@@ -514,3 +516,25 @@ suspend fun Library.exportTo(to: Uri, onProgress: (String) -> Unit): Pair<Int, I
     AppLog.i("Exported $copied file(s), $failed failed")
     copied to failed
 }
+
+/**
+ * After everything was copied out to [folder]: removes each file inside the app whose copy in
+ * [folder] has the same content, and nothing else. Returns how many files are still inside
+ * (something saved meanwhile, or a copy that doesn't match): those are kept.
+ */
+internal suspend fun Library.dropCopiesAlsoIn(folder: Uri): Int = withContext(Dispatchers.IO) {
+    val dir = PrivateDocs.dir(ctx)
+    val resolver = ctx.contentResolver
+    val there = runCatching { walk(folder).associate { (d, path) -> path to d.uri } }.getOrDefault(emptyMap())
+    var left = 0
+    dir.walkTopDown().filter { it.isFile }.toList().forEach { f ->
+        val path = f.relativeTo(dir).path
+        val temp = f.name.endsWith(".moving") || f.name.endsWith(".exporting") || f.name == ".nomedia"
+        val same = !temp && there[path]?.let { u -> runCatching { resolver.openInputStream(u)!!.use { sha256(it) } == f.inputStream().use { sha256(it) } }.getOrDefault(false) } == true
+        if (temp || same) f.delete() else left++
+    }
+    // Sub-folders that are empty now.
+    dir.walkBottomUp().filter { it.isDirectory && it != dir && it.list().isNullOrEmpty() }.toList().forEach { it.delete() }
+    left
+}
+

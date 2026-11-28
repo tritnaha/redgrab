@@ -28,12 +28,11 @@ import app.redgrab.ui.RedGrabTheme
 /**
  * What Android's settings open in place of their one-tap "Clear storage" for this app. Clearing
  * storage would delete every clip kept inside the app, so it is offered here behind a warning and
- * a second confirmation. It shows no clip and no name.
+ * a second confirmation. It shows no clip, no name and no count.
  */
 class ManageSpaceActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val inside = PrivateDocs.dir(this).walkTopDown().count { it.isFile }
         setContent {
             RedGrabTheme {
                 Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
@@ -47,10 +46,13 @@ class ManageSpaceActivity : ComponentActivity() {
                     )
                     Column(Modifier.fillMaxSize().padding(32.dp), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
                         Text("RedGrab storage", style = MaterialTheme.typography.titleLarge)
-                        Text(if (inside > 0) "%,d files are kept inside the app. Clearing storage deletes them. Export them first (Settings → Storage → Export all).".format(inside)
-                            else "Clearing storage removes your sign-ins and settings.",
+                        Text("Clearing storage deletes every clip kept inside the app, your sign-ins and settings. Export the clips first.",
                             style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(top = 12.dp, bottom = 24.dp))
-                        Button(onClick = { startActivity(Intent(this@ManageSpaceActivity, MainActivity::class.java)); finish() }) { Text("Open RedGrab") }
+                        // Into the app's own task, not on top of Android's settings.
+                        Button(onClick = {
+                            packageManager.getLaunchIntentForPackage(packageName)?.let { startActivity(it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+                            finish()
+                        }) { Text("Open RedGrab") }
                         OutlinedButton(onClick = { confirm = true }, modifier = Modifier.padding(top = 8.dp)) { Text("Clear storage") }
                     }
                 }

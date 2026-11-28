@@ -45,8 +45,8 @@ android {
         minSdk = 36 // Android 16; nothing older is supported or tested
         targetSdk = 36
         // The build number has to go up with every release: the updater compares it.
-        versionCode = 28
-        versionName = "13.15"
+        versionCode = 29
+        versionName = "13.16"
         // Only used by the screenshot test (app/src/androidTest), which runs on a phone or emulator.
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("String", "GITHUB_REPO", "\"tritnaha/redgrab\"")
