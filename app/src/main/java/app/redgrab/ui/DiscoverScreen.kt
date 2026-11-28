@@ -1,5 +1,6 @@
 package app.redgrab.ui
 
+import app.redgrab.*
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -127,6 +128,7 @@ fun DiscoverScreen(vm: MainViewModel, onSignIn: () -> Unit, onOpenSettings: () -
             if (source == OnlineSource.RedGifs) vm.loadFollowedNiches()
             if (source == OnlineSource.RedGifs || source == OnlineSource.All) vm.ensureSearchIndex()
             if (source == OnlineSource.Reddit) vm.loadSubreddits()
+            if (source == OnlineSource.FourChan) vm.loadChanBoards()
             if (d.items.isEmpty() && !d.loading && d.error == null) vm.loadMoreDiscover()
         }
     }
@@ -202,46 +204,17 @@ fun DiscoverScreen(vm: MainViewModel, onSignIn: () -> Unit, onOpenSettings: () -
             )
         },
     ) { pad ->
-        if (source == OnlineSource.RedGifs && !vm.signedIn) {
-            Column(Modifier.padding(pad).padding(bottom = navPad).fillMaxSize().padding(32.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
-                Text("Sign in to browse RedGifs", style = MaterialTheme.typography.titleMedium)
-                Spacer(Modifier.height(12.dp))
-                Button(onClick = onSignIn) { Text("Sign in") }
-            }
-            return@Scaffold
-        }
-        if (source == OnlineSource.Reddit && vm.redditClientId.isBlank()) {
-            Column(Modifier.padding(pad).padding(bottom = navPad).fillMaxSize().padding(32.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
-                Text("Reddit needs a client ID", style = MaterialTheme.typography.titleMedium)
-                Spacer(Modifier.height(12.dp))
-                Button(onClick = onOpenSettings) { Text("Settings") }
-            }
-            return@Scaffold
-        }
-        if (vm.sfw) {
+        // What stands in for the feed when it can't be shown.
+        val notice = Modifier.padding(pad).padding(bottom = navPad)
+        when {
+            source == OnlineSource.RedGifs && !vm.signedIn -> { Notice(notice, title = "Sign in to browse RedGifs", action = "Sign in", onAction = onSignIn); return@Scaffold }
+            source == OnlineSource.Reddit && vm.redditClientId.isBlank() -> { Notice(notice, title = "Reddit needs a client ID", action = "Settings", onAction = onOpenSettings); return@Scaffold }
             // SFW mode: online browsing is paused entirely; no thumbnails are fetched.
-            Column(Modifier.padding(pad).padding(bottom = navPad).fillMaxSize().padding(32.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
-                Icon(Icons.Default.VisibilityOff, null, Modifier.size(48.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                Spacer(Modifier.height(12.dp))
-                Text("Online browsing is paused in SFW mode", style = MaterialTheme.typography.titleMedium, textAlign = TextAlign.Center)
-                Text("Nothing is loaded while SFW mode is on.",
-                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    textAlign = TextAlign.Center, modifier = Modifier.padding(top = 4.dp))
-                Spacer(Modifier.height(12.dp))
-                Button(onClick = { vm.changeSfw(false) }) { Text("Turn off SFW mode") }
+            vm.sfw -> {
+                Notice(notice, Icons.Default.VisibilityOff, "Online browsing is paused in SFW mode", "Nothing is loaded while SFW mode is on.", "Turn off SFW mode") { vm.changeSfw(false) }
+                return@Scaffold
             }
-            return@Scaffold
-        }
-        if (vm.offline) {
-            Column(Modifier.padding(pad).padding(bottom = navPad).fillMaxSize().padding(32.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
-                Icon(Icons.Default.CloudOff, null, Modifier.size(48.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                Spacer(Modifier.height(12.dp))
-                Text("You're offline", style = MaterialTheme.typography.titleMedium)
-                Text("Online browsing needs a connection. Everything on the Saved tab still works.",
-                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    textAlign = TextAlign.Center, modifier = Modifier.padding(top = 4.dp))
-            }
-            return@Scaffold
+            vm.offline -> { Notice(notice, Icons.Default.CloudOff, "You're offline", "Online browsing needs a connection. Everything on the Saved tab still works."); return@Scaffold }
         }
         // Online clips animate only if "also preview unsaved clips" is on; saved ones always can.
         val streamOk = vm.previewUnsaved
@@ -258,7 +231,13 @@ fun DiscoverScreen(vm: MainViewModel, onSignIn: () -> Unit, onOpenSettings: () -
         }
         val shortcuts = remember(source, d.subs, vm.recents, vm.redditUser) {
             val mine = if (source == OnlineSource.Reddit && vm.redditUser != null) listOf(Feed.RedditSaved, Feed.RedditUpvoted) else emptyList()
-            val recent = if (source == OnlineSource.RedGifs) listOf(Feed.MyNiches, Feed.ForYou, Feed.Search("")) else vm.recents.map { Feed.fromQuery(source, it) }
+            val recent = when (source) {
+                OnlineSource.RedGifs -> listOf(Feed.MyNiches, Feed.ForYou, Feed.Search(""))
+                // What these sites list by themselves, then what you opened recently.
+                OnlineSource.EroMe -> listOf(Feed.EromeExplore(false), Feed.EromeExplore(true)) + vm.recents.map { Feed.fromQuery(source, it) }
+                OnlineSource.SexCom -> listOf(Feed.SexSearch("")) + vm.recents.map { Feed.fromQuery(source, it) }
+                else -> vm.recents.map { Feed.fromQuery(source, it) }
+            }
             (mine + recent + d.subs.map { Feed.Subreddit(it) }).distinctBy { it.title.lowercase() }.filter { !it.needsQuery }
         }
         Box(Modifier.padding(pad).fillMaxSize()) {
@@ -278,7 +257,7 @@ fun DiscoverScreen(vm: MainViewModel, onSignIn: () -> Unit, onOpenSettings: () -
                     OnlineSource.FikFap -> "Hashtag, or @user"
                     OnlineSource.SexCom -> "Search GIFs"
                     OnlineSource.EroMe -> "Search, or @user"
-                    OnlineSource.FourChan -> "Search /gif/ threads"
+                    OnlineSource.FourChan -> "Search /${(d.feed as? Feed.ChanThreads)?.board ?: "gif"}/ threads"
                 }
                 BarSearchField(query, { query = it; vm.suggest(it) }, hint, modifier = head, leadingIcon = true,
                     onSearch = { keyboard?.hide(); vm.suggest(""); vm.openFeed(vm.feedFor(source, query)) })
@@ -300,7 +279,7 @@ fun DiscoverScreen(vm: MainViewModel, onSignIn: () -> Unit, onOpenSettings: () -
             }
             if (shortcuts.isNotEmpty()) {
                 item(span = StaggeredGridItemSpan.FullLine) {
-                    CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides 40.dp) {
+                    CompactTouch {
                         LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp), contentPadding = PaddingValues(horizontal = m.head)) {
                             items(shortcuts, key = { it.title }) { f -> FilterChip(d.feed == f, { vm.openFeed(f) }, { Text(f.title, maxLines = 1) }) }
                             // Every niche on RedGifs, to look through, search and follow.
@@ -308,6 +287,42 @@ fun DiscoverScreen(vm: MainViewModel, onSignIn: () -> Unit, onOpenSettings: () -
                                 AssistChip(onClick = vm::openNicheBrowser, label = { Text("Browse niches") }, leadingIcon = { Icon(Icons.Default.Search, null, Modifier.size(16.dp)) })
                             }
                         }
+                    }
+                }
+            }
+            // 4chan's boards (the ones that aren't "work safe"): one tap opens a board's threads.
+            if (source == OnlineSource.FourChan && vm.chanBoards.any { it.adult }) {
+                item(span = StaggeredGridItemSpan.FullLine) {
+                    CompactTouch {
+                        LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp), contentPadding = PaddingValues(horizontal = m.head), verticalAlignment = Alignment.CenterVertically) {
+                            item(key = "boards-label") { Text("Boards", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary) }
+                            items(vm.chanBoards.filter { it.adult }, key = { "b" + it.name }) { b ->
+                                FilterChip((d.feed as? Feed.ChanThreads)?.board == b.name, { vm.openFeed(Feed.ChanThreads("", b.name)) }, { Text("/${b.name}/ ${b.title}", maxLines = 1) })
+                            }
+                        }
+                    }
+                }
+            }
+            // What you follow on a site without following of its own (kept in the app); also part of All sites.
+            if (source != OnlineSource.RedGifs && source != OnlineSource.All && vm.siteFollows[source].orEmpty().isNotEmpty()) {
+                item(span = StaggeredGridItemSpan.FullLine) {
+                    CompactTouch {
+                        LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp), contentPadding = PaddingValues(horizontal = m.head), verticalAlignment = Alignment.CenterVertically) {
+                            item(key = "site-follows-label") { Text("Following", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary) }
+                            items(vm.siteFollows[source].orEmpty(), key = { "sf$it" }) { q ->
+                                FilterChip(d.feed.query.equals(q, ignoreCase = true), { vm.openFeed(vm.feedFor(source, q)) }, { Text(q, maxLines = 1) })
+                            }
+                        }
+                    }
+                }
+            }
+            if (source != OnlineSource.RedGifs && source != OnlineSource.All && source != OnlineSource.Reddit && d.feed.query.isNotBlank()) {
+                item(span = StaggeredGridItemSpan.FullLine) {
+                    Row(head, verticalAlignment = Alignment.CenterVertically) {
+                        Text(d.feed.title, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f),
+                            maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        if (vm.followsOn(source, d.feed.query)) androidx.compose.material3.OutlinedButton(onClick = { vm.toggleSiteFollow(source, d.feed.query) }) { Text("Following") }
+                        else androidx.compose.material3.FilledTonalButton(onClick = { vm.toggleSiteFollow(source, d.feed.query) }) { Text("Follow") }
                     }
                 }
             }
@@ -345,7 +360,7 @@ fun DiscoverScreen(vm: MainViewModel, onSignIn: () -> Unit, onOpenSettings: () -
             // Tags you follow (kept in the app): one tap opens the tag.
             if (source == OnlineSource.RedGifs && vm.followedTags.isNotEmpty() && (home || d.feed is Feed.Search || d.feed is Feed.Tags)) {
                 item(span = StaggeredGridItemSpan.FullLine) {
-                    CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides 40.dp) {
+                    CompactTouch {
                         LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp), contentPadding = PaddingValues(horizontal = m.head), verticalAlignment = Alignment.CenterVertically) {
                             item(key = "followed-tags-label") { Text("Tags you follow", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary) }
                             items(vm.followedTags, key = { "ft$it" }) { t ->
@@ -369,7 +384,7 @@ fun DiscoverScreen(vm: MainViewModel, onSignIn: () -> Unit, onOpenSettings: () -
             val asTags = when (val f = d.feed) { is Feed.Tags -> f.tags; is Feed.Search -> vm.tagsIn(f.query); else -> null }
             if (asTags != null) {
                 item(span = StaggeredGridItemSpan.FullLine) {
-                    CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides 40.dp) {
+                    CompactTouch {
                         Row(head, horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
                             FilterChip(d.feed is Feed.Tags, { if (d.feed !is Feed.Tags) vm.openFeed(Feed.Tags(asTags)) }, { Text(if (asTags.size > 1) "Every tag" else "Exact tag") })
                             FilterChip(d.feed is Feed.Search, { if (d.feed !is Feed.Search) vm.openFeed(Feed.Search(asTags.joinToString(" "))) }, { Text("Text search") })
@@ -401,7 +416,7 @@ fun DiscoverScreen(vm: MainViewModel, onSignIn: () -> Unit, onOpenSettings: () -
             }
             if (d.feed.orders.isNotEmpty()) {
                 item(span = StaggeredGridItemSpan.FullLine) {
-                    CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides 40.dp) {
+                    CompactTouch {
                         Row(Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = m.head), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                             d.feed.orders.forEach { o -> FilterChip(d.order == o, { vm.changeDiscoverOrder(o) }, { Text(o.label) }) }
                         }

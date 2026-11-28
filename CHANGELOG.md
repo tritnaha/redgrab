@@ -6,6 +6,51 @@ time it opens after an update, and the whole list under Settings → About → W
 Each version has the sections it needs out of Added, Changed and Fixed, one line per change,
 and a link to the code that made it.
 
+## 13.15 (build 28) · 2026-11-27
+
+### Added
+- Clips can be kept inside the app, where no gallery, file browser or computer on a cable can see them. New installs start that way.
+- Settings → Save folder → "Keep inside the app" moves everything from the save folder in at once; an interrupted move carries on when started again.
+- "Export all" copies every saved file out as plain MP4/GIF files into a folder you pick. Nothing is removed from the app.
+- When uninstalling, Android now offers to keep the app's data, so the clips are still there after installing again.
+- "Bring in a folder" takes a folder of RedGrab clips from before (an earlier install, another phone) into the app.
+- Each file moved in is read back and compared with its original before the original is deleted.
+- Exported folders get a marker that keeps galleries from showing the copies; the export asks first.
+
+### Changed
+- Sharing to WhatsApp, editing, importing and previews work the same with clips kept inside the app.
+- Downloads, imports and folder changes wait while a move or export is running.
+
+### Fixed
+- "Overwrite original" on an imported clip put the edited file in the wrong place and lost the original.
+- Importing two files with the same name could write one over the other.
+
+## 13.14 (build 27) · 2026-11-27
+
+### Added
+- Follow things on sites that have no following of their own: FikFap hashtags, sex.com and EroMe searches, 4chan boards and searches. They show in a "Following" row.
+- All sites, with nothing typed, is your feed across the sites: RedGifs niches and tags, Reddit's front page, and what you follow elsewhere.
+- sex.com lists its most liked GIFs without a search. EroMe opens on its Hot and New lists. 4chan has a row of boards.
+
+### Changed
+- Inside the app: settings storage and the two largest code files were reorganised. Nothing should behave differently.
+- The first in-app update asks once, through Android, to allow RedGrab to install apps. After that, updates install on a tap.
+
+### Fixed
+- Release checks: the app's own updater is now run end to end on an emulator (older version finds, downloads and installs the new one).
+
+[Details](https://github.com/tritnaha/redgrab/commit/d37ce53)
+
+## 13.13 (build 26) · 2026-11-27
+
+### Changed
+- The app is 6.5 MB instead of 18 MB: code and pictures it never uses (most of an icon library) are left out of the build.
+- Needs Android 16 or later. Code for older versions is removed.
+- Answers from sites are limited in size (16 MB of text, 4 GB per stream), so a broken site can't fill memory or storage.
+- Release builds: every workflow action is pinned to an exact commit; the signing key's password can be a secret.
+
+[Details](https://github.com/tritnaha/redgrab/commit/6d9a1c3)
+
 ## 13.12 (build 25) · 2026-11-27
 
 ### Added
@@ -25,6 +70,8 @@ and a link to the code that made it.
 ### Fixed
 - A deleted clip no longer shows as an unfinished download: the empty file a download attempt left behind is removed.
 - Release checks: the on-device tests no longer wait behind Android's notification question, and run on Android 16.
+
+[Details](https://github.com/tritnaha/redgrab/commit/5ac835a)
 
 ## 13.11 (build 24) · 2026-11-27
 

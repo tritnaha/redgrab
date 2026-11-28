@@ -91,20 +91,16 @@ class MainActivity : ComponentActivity() {
         if (it.resultCode == RESULT_OK) vm.refresh()
     }
 
-    private val confirmLock = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
-        AppLock.legacyResult(it.resultCode == RESULT_OK)
-    }
     /** Android's unlock prompt (fingerprint, face, PIN, pattern or password, whatever the phone has). */
     private fun askIdentity(title: String, onResult: (Boolean) -> Unit = {}) =
-        AppLock.ask(this, title, legacy = { confirmLock.launch(it) }, onResult = onResult)
+        AppLock.ask(this, title, onResult = onResult)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         installSplashScreen()
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
 
-        if (Build.VERSION.SDK_INT >= 33 &&
-            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
         ) notifPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
 
         setContent {

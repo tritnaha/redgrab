@@ -173,7 +173,7 @@ class ScreenshotsTest {
 
     private fun MainViewModel.showOnline(clips: List<Clip>) {
         val next = discover.copy(items = clips, page = 1, firstPage = 1, pages = 40, pageStarts = listOf(0), hasMore = false, loading = false, error = null)
-        MainViewModel::class.java.getDeclaredMethod("setDiscover", DiscoverState::class.java).apply { isAccessible = true }.invoke(this, next)
+        discover = next
     }
 
     /** Opens the app with the sample library and hands over its view model once the first screen is up. */
@@ -182,8 +182,18 @@ class ScreenshotsTest {
         ActivityScenario.launch(MainActivity::class.java).use { scenario ->
             lateinit var vm: MainViewModel
             scenario.onActivity { vm = ViewModelProvider(it)[MainViewModel::class.java] }
-            // An emulator without acceleration can take a minute to draw the first screen.
-            check(device.wait(Until.hasObject(By.text("Browse")), 240_000)) { "the app's first screen didn't come up" }
+            // A busy emulator can take a while to draw the first screen, and may put one of its own dialogs
+            // ("... isn't responding") on top: that one is answered with "Wait".
+            var up = false
+            for (attempt in 1..12) {
+                if (device.wait(Until.hasObject(By.text("Browse")), 10_000)) { up = true; break }
+                device.findObject(By.text("Wait"))?.click()
+            }
+            check(up) {
+                // What is on screen instead, so a failure says why.
+                val texts = device.findObjects(By.clazz("android.widget.TextView")).mapNotNull { runCatching { it.text }.getOrNull() }.filter { it.isNotBlank() }.take(12)
+                "the app's first screen didn't come up; in front: ${device.currentPackageName}, showing $texts"
+            }
             block(scenario, vm, mine)
         }
     }
@@ -212,6 +222,20 @@ class ScreenshotsTest {
         tab("Online")
         await("For you")
         shot("v13-online")
+    }
+
+    /** Suggestions under the search box: tags and niches that exist, from the lists kept on the phone. */
+    @Test fun search() = withApp { scenario, vm, mine ->
+        scenario.onActivity { vm.changeSource(OnlineSource.RedGifs); vm.showOnline(feed(mine)) }
+        tab("Online")
+        await("For you")
+        Thread.sleep(3000)
+        scenario.onActivity { vm.showOnline(feed(mine)); vm.suggest("sun") }
+        await("Sunset")
+        // Creators are looked up on the site; the picture shows only the made-up tags and niches.
+        Thread.sleep(4000)
+        scenario.onActivity { vm.suggestions = vm.suggestions.filter { it.kind != Suggestion.Kind.Creator && it.kind != Suggestion.Kind.Subreddit } }
+        shot("v13-search")
     }
 
     /** A clip opened over the grid. */
@@ -320,10 +344,101 @@ class ScreenshotsTest {
         device.pressBack()
     }
 
+    /**
+     * Clips kept inside the app: the private store takes files through the same calls the save folder
+     * gets (create, write, list, read, rename, delete), a whole folder moves in at once with nothing
+     * lost, and export writes plain files back out.
+     */
+    @Test fun privateStorageKeepsMovesAndExports() {
+        val lib = app.library
+        val resolver = app.contentResolver
+        val before = lib.prefs.folderUri; val label = lib.prefs.folderLabel
+        PrivateDocs.dir(app).deleteRecursively()
+        try {
+            // The private store behaves like a save folder.
+            lib.prefs.folderUri = PrivateDocs.TREE
+            val folder = lib.folder() ?: error("the private store isn't usable as a save folder")
+            val part = folder.createFile("application/octet-stream", "clipone-hd.part") ?: error("no file created")
+            resolver.openOutputStream(part.uri, "wt")!!.use { it.write(ByteArray(5000) { 7 }) }
+            resolver.openOutputStream(part.uri, "wa")!!.use { it.write(ByteArray(3000) { 9 }) }
+            val done = android.provider.DocumentsContract.renameDocument(resolver, part.uri, "clipone-hd.mp4") ?: error("not renamed")
+            check(lib.listNames() == listOf("clipone-hd.mp4")) { "listing: ${lib.listNames()}" }
+            check(lib.listEntries().single().size == 8000L) { "size: ${lib.listEntries()}" }
+            check(lib.fileUri("clipone-hd.mp4")?.let(lib::exists) == true) { "the file isn't found by name" }
+            check(resolver.openInputStream(done)!!.use { it.readBytes() }.let { it.size == 8000 && it[0] == 7.toByte() && it[7999] == 9.toByte() })
+            check(File(PrivateDocs.dir(app), "clipone-hd.mp4").length() == 8000L)
+            // Nothing outside the folder can be reached through it.
+            check(runCatching { resolver.openInputStream(android.provider.DocumentsContract.buildDocumentUriUsingTree(PrivateDocs.TREE, "clips/../shared_prefs/redgrab.xml")) }.isFailure)
+            android.provider.DocumentsContract.deleteDocument(resolver, done)
+            check(lib.listNames().isEmpty())
+
+            // A name that is taken is not handed out twice: a second file gets a name of its own.
+            val first = folder.createFile("video/mp4", "same.mp4")!!; val second = folder.createFile("video/mp4", "same.mp4")!!
+            check(first.name == "same.mp4" && second.name == "same (1).mp4") { "names: ${first.name}, ${second.name}" }
+            first.delete(); second.delete()
+            // The folder itself can't be renamed or deleted through the store.
+            check(runCatching { android.provider.DocumentsContract.renameDocument(resolver, android.provider.DocumentsContract.buildDocumentUriUsingTree(PrivateDocs.TREE, "clips"), "x") }.getOrNull() == null)
+
+            // A folder of files, one in a sub-folder, moves in at once; the originals are gone afterwards.
+            // The old folder is addressed the way "New subfolder" addresses one: as a document inside a picked folder.
+            // The move must take that folder only, not everything in the folder that was picked.
+            val store = PrivateDocs.dir(app)
+            val old = File(store, "old").apply { mkdirs() }
+            File(old, "a-hd.mp4").writeBytes(ByteArray(4000) { 1 }); File(old, "b-sd.mp4").writeBytes(ByteArray(2500) { 2 })
+            File(old, "imported").mkdirs(); File(old, "imported/c.gif").writeBytes(ByteArray(900) { 3 }); File(old, ".nomedia").writeBytes(ByteArray(0))
+            File(store, "elsewhere").mkdirs(); File(store, "elsewhere/not-ours.mp4").writeBytes(ByteArray(700) { 5 })
+            // Already inside under the same name but with other content: must not be overwritten, and its original must stay.
+            File(store, "b-sd.mp4").writeBytes(ByteArray(2500) { 8 })
+            val oldFolder = android.provider.DocumentsContract.buildDocumentUriUsingTree(PrivateDocs.TREE, "clips/old")
+            check(kotlinx.coroutines.runBlocking { lib.prefs.folderUri = PrivateDocs.TREE; lib.moveIntoApp { } } == (0 to 0)) { "a folder already inside was moved" }
+            val (moved, failed) = kotlinx.coroutines.runBlocking { lib.moveTreeIntoApp(oldFolder) { } }
+            check(moved == 2 && failed == 1) { "moved $moved, failed $failed" }
+            check(File(store, "a-hd.mp4").readBytes().let { it.size == 4000 && it.all { b -> b == 1.toByte() } } && File(store, "imported/c.gif").length() == 900L) { "the moved files aren't in place" }
+            check(File(store, "b-sd.mp4").readBytes().all { it == 8.toByte() } && File(old, "b-sd.mp4").readBytes().all { it == 2.toByte() }) { "a different file of the same name was overwritten or its original deleted" }
+            check(!File(old, "a-hd.mp4").exists() && !File(old, "imported/c.gif").exists()) { "originals were left behind" }
+            check(File(store, "elsewhere/not-ours.mp4").length() == 700L && !File(store, "not-ours.mp4").exists()) { "the move reached outside the folder it was given" }
+            check(store.walkTopDown().none { it.name.endsWith(".moving") }) { "a half-made copy was left" }
+            // Not everything could be moved, so the old folder is not tidied away.
+            check(!kotlinx.coroutines.runBlocking { lib.tidyMovedFolder(oldFolder) } && File(old, ".nomedia").exists())
+            File(old, "b-sd.mp4").delete()
+            check(kotlinx.coroutines.runBlocking { lib.tidyMovedFolder(oldFolder) } && !File(old, ".nomedia").exists() && !File(old, "imported").exists()) { "the emptied folder wasn't tidied" }
+            old.deleteRecursively(); File(store, "elsewhere").deleteRecursively()
+
+            // Export: plain files, sub-folder kept, a marker against galleries, the app's own copies stay.
+            lib.prefs.folderUri = PrivateDocs.TREE
+            File(store, "out").mkdirs()
+            val outTree = android.provider.DocumentsContract.buildTreeDocumentUri(PrivateDocs.AUTHORITY, "clips/out")
+            // (Into a folder inside the store itself, which is all a test may write to; the export must not copy its own output.)
+            val (copied, bad) = kotlinx.coroutines.runBlocking { lib.exportTo(outTree) { } }
+            check(bad == 0 && copied == 3) { "exported $copied, failed $bad" }
+            check(File(store, "out/a-hd.mp4").length() == 4000L && File(store, "out/imported/c.gif").length() == 900L && File(store, "out/.nomedia").exists()) { "exported files missing" }
+            check(!File(store, "out/out").exists() && File(store, "out").walkTopDown().none { it.name.endsWith(".exporting") }) { "the export copied itself or left a half-made file" }
+            check(File(store, "a-hd.mp4").exists()) { "export removed the app's copy" }
+            // A second export copies nothing again.
+            check(kotlinx.coroutines.runBlocking { lib.exportTo(outTree) { } } == (0 to 0))
+        } finally {
+            PrivateDocs.dir(app).deleteRecursively()
+            lib.prefs.folderUri = before; lib.prefs.folderLabel = label
+        }
+    }
+
+    /** Following something on a site without following of its own: it shows in a row there, and can be undone. */
+    @Test fun followsOnOtherSites() = withApp { scenario, vm, _ ->
+        scenario.onActivity { vm.changeSource(OnlineSource.FikFap); if (!vm.followsOn(OnlineSource.FikFap, "sunset")) vm.toggleSiteFollow(OnlineSource.FikFap, "sunset") }
+        tab("Online")
+        await("Following")
+        await("sunset")
+        check(vm.followsOn(OnlineSource.FikFap, "SUNSET")) { "the follow wasn't kept: ${vm.siteFollows}" }
+        // It is part of the mix "All sites" shows when nothing is typed.
+        check(AllSites.feeds("", redGifs = false, reddit = false, personal = false, follows = vm.siteFollows).any { it.key == "FikFap|sunset" })
+        scenario.onActivity { vm.toggleSiteFollow(OnlineSource.FikFap, "sunset"); vm.changeSource(OnlineSource.RedGifs) }
+        check(!vm.followsOn(OnlineSource.FikFap, "sunset"))
+    }
+
     @Test fun whatsNew() = withApp { scenario, vm, _ ->
         // What an update shows: the versions that are new to you (here, the last two).
         val recent = vm.changelog.take(2)
-        scenario.onActivity { MainViewModel::class.java.getDeclaredMethod("setWhatsNew", List::class.java).apply { isAccessible = true }.invoke(vm, recent) }
+        scenario.onActivity { vm.whatsNew = recent }
         await("What's new")
         shot("v13-whats-new")
     }

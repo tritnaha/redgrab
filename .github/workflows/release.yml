@@ -13,8 +13,12 @@
 #              build, and has to start (.github/scripts/upgrade-smoke.sh)
 #   publish    may write releases; publishes exactly the APK the build job made
 #   behaviour  no secrets: the on-device tests (.github/scripts/behaviour-tests.sh); can't hold a release up
+#   screenshots may write: pushes the pictures the on-device tests took to the branch ci-screenshots
 #   updater    no secrets: after publishing, the release before is installed and has to update
 #              itself through the app's own updater (.github/scripts/updater-e2e.sh); can't hold a release up
+#
+# Every action is pinned to the exact commit its version tag pointed at when it was added (the tag
+# is in the comment beside it), so none of them can change under this workflow.
 #
 # The emulator runs Android 16 (API 36); older versions are not tested. The three emulator jobs run
 # on GitHub's standard Linux runner unless the repository variable EMULATOR_RUNNER names another
@@ -61,7 +65,7 @@ jobs:
       published: ${{ steps.version.outputs.published }}
       work: ${{ steps.version.outputs.work }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           persist-credentials: false
 
@@ -95,7 +99,7 @@ jobs:
           echo "$KEY" | base64 -d > signing/release.keystore
           chmod 600 signing/release.keystore
 
-      - uses: actions/setup-java@v5
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
         if: steps.version.outputs.work == 'true'
         with:
           distribution: temurin
@@ -103,7 +107,7 @@ jobs:
 
       # Gradle's downloads and its build cache, carried from the most recent run. (A cache keyed on the
       # build files would be thrown away by every version bump.)
-      - uses: actions/cache@v4
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         if: steps.version.outputs.work == 'true'
         with:
           path: |
@@ -128,7 +132,7 @@ jobs:
         if: always()
         run: rm -rf signing
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: steps.version.outputs.work == 'true'
         with:
           name: apks
@@ -146,10 +150,10 @@ jobs:
     runs-on: ${{ vars.EMULATOR_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           persist-credentials: false
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: apks
           path: app/build/outputs/apk
@@ -159,7 +163,7 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
       - name: Update test on an emulator
-        uses: reactivecircus/android-emulator-runner@v2
+        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2
         env:
           GH_TOKEN: ${{ github.token }}
         with:
@@ -179,10 +183,10 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           persist-credentials: false
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: apks
           path: app/build/outputs/apk
@@ -209,10 +213,10 @@ jobs:
     timeout-minutes: 20
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           persist-credentials: false
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: apks
           path: app/build/outputs/apk
@@ -222,7 +226,7 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
       - name: Behaviour tests on an emulator
-        uses: reactivecircus/android-emulator-runner@v2
+        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2
         with:
           api-level: 36
           arch: x86_64
@@ -231,6 +235,44 @@ jobs:
           disable-animations: true
           emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
           script: bash .github/scripts/behaviour-tests.sh
+      # The screenshots the tests took, to put in the README.
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: screenshots
+          retention-days: 7
+          if-no-files-found: ignore
+          path: shots/
+
+  # Puts the screenshots the on-device tests took on the branch ci-screenshots (replaced each time),
+  # from where they are copied into screenshots/ for the README. Its own job, because it needs to
+  # write to the repository and the emulator job must not be able to.
+  screenshots:
+    needs: [build, behaviour]
+    if: always() && needs.build.outputs.work == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    continue-on-error: true
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: screenshots
+          path: shots
+      - name: Push them to ci-screenshots
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir out && cd out
+          # Pictures only, whatever else the artifact holds.
+          find ../shots -name '*.png' -exec cp {} . \;
+          ls -la
+          test -n "$(ls *.png 2> /dev/null)"
+          git init -q -b ci-screenshots
+          git add -- *.png
+          git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" commit -q -m "Screenshots from run $GITHUB_RUN_ID ($GITHUB_SHA)"
+          git push -q -f "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" ci-screenshots
 
   # The app's own updater, end to end: the release before the latest is installed and has to find,
   # download and install the latest by itself. Depends on GitHub answering the emulator without a
@@ -242,7 +284,7 @@ jobs:
     timeout-minutes: 20
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           persist-credentials: false
       - name: Allow the emulator to use hardware acceleration
@@ -251,7 +293,7 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
       - name: In-app update test on an emulator
-        uses: reactivecircus/android-emulator-runner@v2
+        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2
         env:
           GH_TOKEN: ${{ github.token }}
         with:

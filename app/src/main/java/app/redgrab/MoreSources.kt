@@ -30,6 +30,12 @@ class EromeApi(private val http: OkHttpClient, private val pauseMs: Long = 300) 
 
     fun user(name: String, cursor: String?, page: Int) = page(listOf(name), mapOf("t" to "posts"), cursor, page)
 
+    /**
+     * The site's own lists of albums: /explore (what is popular now) and /explore/new. They are
+     * laid out like a search result. Not in gallery-dl; written from the site's addresses and not run.
+     */
+    fun explore(newest: Boolean, cursor: String?, page: Int) = page(if (newest) listOf("explore", "new") else listOf("explore"), emptyMap(), cursor, page)
+
     private fun html(path: List<String>, params: Map<String, String> = emptyMap()): String {
         val url = ROOT.toHttpUrl().newBuilder().apply { path.forEach { addPathSegment(it) } }
             .apply { params.forEach { (k, v) -> addQueryParameter(k, v) } }.build()
@@ -108,18 +114,35 @@ class EromeApi(private val http: OkHttpClient, private val pauseMs: Long = 300) 
  *
  * A post's file is https://i.4cdn.org/{board}/{tim}{ext}, its thumbnail .../{tim}s.jpg. Kept
  * are WebM and MP4 clips and animated GIFs. The API asks for at most one request a second.
+ *
+ *  - /boards.json → {boards:[{board, title, ws_board}]}: every board; ws_board 0 = not "work safe"
+ *    (from 4chan's API documentation; not in gallery-dl and not run)
  */
-class FourChanApi(private val http: OkHttpClient, private val pauseMs: Long = 1100) {
+class FourChanApi(private val http: OkHttpClient, board: String = BOARD, private val pauseMs: Long = 1100) {
+    /** The board asked: its short name as in the address ("gif"). Anything else falls back to /gif/. */
+    private val board = board.takeIf { BOARD_NAME.matches(it) } ?: BOARD
+
+    data class Board(val name: String, val title: String, val adult: Boolean)
+
+    /** Every board, in the site's order. */
+    fun boards(): List<Board> {
+        val arr = JSONObject(get("boards.json")).optJSONArray("boards") ?: return emptyList()
+        return (0 until arr.length()).mapNotNull { i ->
+            val b = arr.optJSONObject(i) ?: return@mapNotNull null
+            val name = b.text("board").takeIf { BOARD_NAME.matches(it) } ?: return@mapNotNull null
+            Board(name, unescapeHtml(b.text("title")).ifBlank { name }, b.optInt("ws_board", 1) == 0)
+        }
+    }
 
     private fun get(path: String): String = http.getText("https://a.4cdn.org/$path".toHttpUrl(), mapOf("Accept" to "application/json"))
 
-    /** Threads of [BOARD] whose subject or first post has every word of [query] (all threads if blank). The cursor is the thread numbers not opened yet. */
+    /** Threads of the board whose subject or first post has every word of [query] (all threads if blank). The cursor is the thread numbers not opened yet. */
     fun threads(query: String, cursor: String?, page: Int): OnlinePage {
         var requests = 0
         val pending = ArrayDeque(if (cursor != null) cursor.split(',').filter { it.isNotEmpty() && it.all(Char::isDigit) } else {
             requests++
             val words = query.lowercase().split(' ').filter { it.isNotBlank() }
-            val pages = JSONArray(get("$BOARD/catalog.json"))
+            val pages = JSONArray(get("$board/catalog.json"))
             (0 until pages.length()).flatMap { i ->
                 val list = pages.optJSONObject(i)?.optJSONArray("threads") ?: JSONArray()
                 (0 until list.length()).mapNotNull { list.optJSONObject(it) }
@@ -143,7 +166,7 @@ class FourChanApi(private val http: OkHttpClient, private val pauseMs: Long = 11
 
     /** The clips posted in one thread, named after the thread. */
     fun thread(no: String): List<Clip> {
-        val posts = JSONObject(get("$BOARD/thread/$no.json")).optJSONArray("posts") ?: return emptyList()
+        val posts = JSONObject(get("$board/thread/$no.json")).optJSONArray("posts") ?: return emptyList()
         val first = posts.optJSONObject(0) ?: return emptyList()
         val title = unescapeHtml(first.text("sub").ifBlank { plain(first.text("com")) }).trim().take(80)
         return (0 until posts.length()).mapNotNull { i ->
@@ -152,7 +175,7 @@ class FourChanApi(private val http: OkHttpClient, private val pauseMs: Long = 11
             val ext = p.text("ext").lowercase().takeIf { it in KEPT } ?: return@mapNotNull null
             if (p.optInt("filedeleted") == 1) return@mapNotNull null
             Clip(
-                id = "${OnlineSource.FourChan.prefix}$BOARD-$tim", hd = "$FILES/$BOARD/$tim$ext", sd = null, thumb = "$FILES/$BOARD/${tim}s.jpg",
+                id = "${OnlineSource.FourChan.prefix}$board-$tim", hd = "$FILES/$board/$tim$ext", sd = null, thumb = "$FILES/$board/${tim}s.jpg",
                 duration = 0.0, width = p.optInt("w"), height = p.optInt("h"), hasAudio = ext != ".gif",
                 user = "", created = p.optLong("time"), sources = setOf(OnlineSource.FourChan.label), description = title,
             )
@@ -162,6 +185,7 @@ class FourChanApi(private val http: OkHttpClient, private val pauseMs: Long = 11
     companion object {
         /** The board for adult GIFs and WebMs. */
         const val BOARD = "gif"
+        private val BOARD_NAME = Regex("[a-z0-9]{1,6}")
         private const val FILES = "https://i.4cdn.org"
         private val KEPT = setOf(".webm", ".mp4", ".gif")
         /** A post's text without its HTML. */

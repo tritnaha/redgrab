@@ -92,7 +92,7 @@ internal fun unescapeHtml(s: String) = s.replace("&#39;", "'").replace("&#039;",
 internal fun OkHttpClient.getText(url: HttpUrl, headers: Map<String, String> = emptyMap()): String {
     val req = Request.Builder().url(url).apply { headers.forEach { (k, v) -> header(k, v) } }.build()
     newCall(req).execute().use { r ->
-        val body = r.body?.string().orEmpty()
+        val body = r.text()
         if (!r.isSuccessful) throw HttpException(r.code, "HTTP ${r.code} for ${url.host}${url.encodedPath}: ${body.take(200)}")
         return body
     }
@@ -299,7 +299,7 @@ class RedditApi(private val prefs: RedditStore, private val http: OkHttpClient) 
             .header("Authorization", okhttp3.Credentials.basic(clientId(), ""))
             .header("User-Agent", USER_AGENT).post(form).build()
         http.newCall(req).execute().use { r ->
-            val body = r.body?.string().orEmpty()
+            val body = r.text()
             val j = runCatching { JSONObject(body) }.getOrNull()
             if (!r.isSuccessful || j == null || j.text("access_token").isEmpty()) {
                 val why = j?.text("error")?.ifEmpty { null } ?: "HTTP ${r.code}"
@@ -342,7 +342,7 @@ class RedditApi(private val prefs: RedditStore, private val http: OkHttpClient) 
                 .apply { params.forEach { (k, v) -> if (v != null) addQueryParameter(k, v) } }.build()
             val req = Request.Builder().url(url).header("Authorization", "Bearer ${accessToken()}").header("User-Agent", USER_AGENT).build()
             http.newCall(req).execute().use { r ->
-                val body = r.body?.string().orEmpty()
+                val body = r.text()
                 when {
                     r.code == 401 && attempt == 0 -> prefs.redditAccess = null // token no longer valid: get a new one once
                     r.code == 401 -> throw RedditAuthException("Reddit sign-in expired. Sign in again in Settings.")

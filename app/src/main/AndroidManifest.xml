@@ -22,6 +22,7 @@
     <application
         android:name=".RedGrabApp"
         android:allowBackup="false"
+        android:hasFragileUserData="true"
         android:usesCleartextTraffic="false"
         android:fullBackupContent="false"
         android:dataExtractionRules="@xml/data_extraction_rules"
@@ -63,6 +64,15 @@
 
         <!-- Android's installer reports back here about an update. -->
         <receiver android:name=".UpdateReceiver" android:exported="false" />
+
+        <!-- Clips kept inside the app (see PrivateDocs). Android wants this kind of provider exported under
+             MANAGE_DOCUMENTS, which only the system's Files app holds; it offers no roots and doesn't announce itself, so nothing lists it. -->
+        <provider
+            android:name=".PrivateDocs"
+            android:authorities="${applicationId}.private"
+            android:exported="true"
+            android:grantUriPermissions="true"
+            android:permission="android.permission.MANAGE_DOCUMENTS" />
 
         <provider
             android:name="androidx.core.content.FileProvider"

@@ -1,5 +1,7 @@
 package app.redgrab.ui
 
+import androidx.compose.foundation.layout.fillMaxSize
+import app.redgrab.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -195,3 +197,29 @@ fun BarSearchField(
         }
     }
 }
+
+/** A message that takes a screen's place when its content can't be shown: optional icon, a line or two, optional button. */
+@Composable
+fun Notice(modifier: Modifier = Modifier, icon: androidx.compose.ui.graphics.vector.ImageVector? = null, title: String, body: String? = null,
+           action: String? = null, onAction: () -> Unit = {}) {
+    androidx.compose.foundation.layout.Column(modifier.fillMaxSize().padding(32.dp), horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = androidx.compose.foundation.layout.Arrangement.Center) {
+        if (icon != null) {
+            androidx.compose.material3.Icon(icon, null, Modifier.size(48.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            androidx.compose.foundation.layout.Spacer(Modifier.height(12.dp))
+        }
+        androidx.compose.material3.Text(title, style = MaterialTheme.typography.titleMedium, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+        if (body != null) androidx.compose.material3.Text(body, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = androidx.compose.ui.text.style.TextAlign.Center, modifier = Modifier.padding(top = 4.dp))
+        if (action != null) {
+            androidx.compose.foundation.layout.Spacer(Modifier.height(12.dp))
+            androidx.compose.material3.Button(onClick = onAction) { androidx.compose.material3.Text(action) }
+        }
+    }
+}
+
+/** Rows of chips sit closer together than Material's 48 dp touch targets allow: 40 dp inside this. */
+@Composable
+fun CompactTouch(content: @Composable () -> Unit) =
+    androidx.compose.runtime.CompositionLocalProvider(androidx.compose.material3.LocalMinimumInteractiveComponentSize provides 40.dp, content = content)
+

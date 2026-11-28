@@ -17,6 +17,17 @@ class HttpException(val code: Int, msg: String,
                     val rangeTotal: Long = -1) : IOException(msg)
 
 /**
+ * A response body as text. Anything larger than [limit] is refused instead of read: no listing,
+ * page or playlist the app asks for comes near it, so a larger answer is a broken or hostile one.
+ */
+internal fun okhttp3.Response.text(limit: Long = 16L * 1024 * 1024): String {
+    val b = body ?: return ""
+    val src = b.source()
+    if (src.request(limit + 1)) throw java.io.IOException("The answer is too large (over ${limit / (1024 * 1024)} MB)")
+    return src.buffer.readString(b.contentType()?.charset() ?: Charsets.UTF_8)
+}
+
+/**
  * RedGifs wants a human check (Cloudflare Turnstile) before continuing. The app shows the
  * check to the user, then posts the answer with [RedGifsApi.submitVerification] using [subject].
  */
@@ -205,7 +216,7 @@ class RedGifsApi(private val token: String, private val userAgent: String,
                 .method(method, if (method == "GET") null else body)
                 .build()
             http.newCall(req).execute().use { r ->
-                val body = r.body?.string().orEmpty()
+                val body = r.text()
                 when {
                     r.code == 401 || r.code == 403 -> throw AuthException()
                     r.code == 429 -> {

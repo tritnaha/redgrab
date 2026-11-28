@@ -129,6 +129,14 @@ class SearchTest {
         assertNull(url.queryParameter("query"))
     }
 
+    @Test fun oversizedAnswersAreRefusedNotRead() {
+        fun response(size: Int) = Response.Builder().request(Request.Builder().url("https://example.com/").build()).protocol(Protocol.HTTP_1_1)
+            .code(200).message("OK").body("x".repeat(size).toResponseBody("application/json".toMediaType())).build()
+        assertEquals(2000, response(2000).text(limit = 5000).length)
+        assertEquals("x".repeat(1000), response(1000).text(limit = 1000))
+        try { response(1001).text(limit = 1000); org.junit.Assert.fail("an answer over the limit was read") } catch (e: java.io.IOException) { assertTrue(e.message!!.contains("too large")) }
+    }
+
     @Test fun theFilterHidesGayAndTransUnlessAskedFor() {
         val d = ContentPrefs.DEFAULT
         assertEquals(setOf("straight", "lesbian", "bisexual", "animated"), d)

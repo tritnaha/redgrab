@@ -42,11 +42,11 @@ android {
 
     defaultConfig {
         applicationId = "app.redgrab"
-        minSdk = 26
+        minSdk = 36 // Android 16; nothing older is supported or tested
         targetSdk = 36
         // The build number has to go up with every release: the updater compares it.
-        versionCode = 25
-        versionName = "13.12"
+        versionCode = 28
+        versionName = "13.15"
         // Only used by the screenshot test (app/src/androidTest), which runs on a phone or emulator.
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("String", "GITHUB_REPO", "\"tritnaha/redgrab\"")
@@ -76,9 +76,9 @@ android {
 
     buildTypes {
         release {
-            // -Pshrink removes code and resources the app never uses (most of the icon set, for one). Names are
-            // kept, so logs and crash reports stay readable. Off by default until a shrunk build has been used on a phone.
-            val shrink = project.hasProperty("shrink")
+            // Code and resources the app never uses are removed (most of the icon set, for one): about 6.5 MB
+            // instead of 18. Names are kept, so logs and crash reports stay readable. -PnoShrink builds it whole.
+            val shrink = !project.hasProperty("noShrink")
             isMinifyEnabled = shrink
             isShrinkResources = shrink
             if (shrink) proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "shrink-rules.pro")

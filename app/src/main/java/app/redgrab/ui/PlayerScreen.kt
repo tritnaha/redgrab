@@ -1,5 +1,6 @@
 package app.redgrab.ui
 
+import app.redgrab.*
 import android.app.Activity
 import android.net.Uri
 import android.webkit.WebSettings

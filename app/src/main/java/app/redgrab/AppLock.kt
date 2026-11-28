@@ -91,12 +91,8 @@ object AppLock {
         })
     }
 
-    /** Keeps the app's picture out of the recent-apps list (Android 13+), or blocks capturing its screen on older versions. */
-    fun hideFromRecents(a: Activity, hide: Boolean) {
-        if (Build.VERSION.SDK_INT >= 33) a.setRecentsScreenshotEnabled(!hide)
-        else if (hide) a.window.addFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE)
-        else a.window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE)
-    }
+    /** Keeps the app's picture out of the recent-apps list. */
+    fun hideFromRecents(a: Activity, hide: Boolean) = a.setRecentsScreenshotEnabled(!hide)
 
     /** Turned on in Settings: locks from the next time the app comes back; off: nothing stays covered. */
     fun settingChanged(a: Activity, on: Boolean) {
@@ -115,34 +111,25 @@ object AppLock {
 
     /**
      * Shows Android's unlock prompt. [onResult] gets true when you proved it's you. Used both to
-     * unlock and to confirm switching the lock on or off. On Android 9 and older, where the prompt
-     * can't offer the PIN itself, [legacy] is called to open the system's "confirm your screen
-     * lock" screen instead; report its outcome with [legacyResult].
+     * unlock and to confirm switching the lock on or off.
      */
-    fun ask(a: Activity, title: String, legacy: (android.content.Intent) -> Unit, onResult: (Boolean) -> Unit = {}) {
+    fun ask(a: Activity, title: String, onResult: (Boolean) -> Unit = {}) {
         if (asking) return
         if (!available(a)) { unlocked(); onResult(true); return } // the screen lock was removed: nothing to check against
         pending = onResult
         asking = true
         try {
-            if (Build.VERSION.SDK_INT >= 29) {
-                val b = android.hardware.biometrics.BiometricPrompt.Builder(a).setTitle(title)
-                if (Build.VERSION.SDK_INT >= 30) b.setAllowedAuthenticators(
-                    android.hardware.biometrics.BiometricManager.Authenticators.BIOMETRIC_WEAK or
-                        android.hardware.biometrics.BiometricManager.Authenticators.DEVICE_CREDENTIAL)
-                else @Suppress("DEPRECATION") b.setDeviceCredentialAllowed(true)
-                b.setConfirmationRequired(false)
-                val s = CancellationSignal().also { signal = it }
-                b.build().authenticate(s, a.mainExecutor, object : android.hardware.biometrics.BiometricPrompt.AuthenticationCallback() {
-                    override fun onAuthenticationSucceeded(result: android.hardware.biometrics.BiometricPrompt.AuthenticationResult?) = done(true)
-                    // Cancelled, too many tries, and so on: stay locked; the lock screen offers another go.
-                    override fun onAuthenticationError(errorCode: Int, errString: CharSequence?) = done(false)
-                })
-            } else {
-                @Suppress("DEPRECATION")
-                val i = a.getSystemService(KeyguardManager::class.java)?.createConfirmDeviceCredentialIntent(title, null)
-                if (i == null) done(true) else legacy(i)
-            }
+            val b = android.hardware.biometrics.BiometricPrompt.Builder(a).setTitle(title)
+            b.setAllowedAuthenticators(
+                android.hardware.biometrics.BiometricManager.Authenticators.BIOMETRIC_WEAK or
+                    android.hardware.biometrics.BiometricManager.Authenticators.DEVICE_CREDENTIAL)
+            b.setConfirmationRequired(false)
+            val s = CancellationSignal().also { signal = it }
+            b.build().authenticate(s, a.mainExecutor, object : android.hardware.biometrics.BiometricPrompt.AuthenticationCallback() {
+                override fun onAuthenticationSucceeded(result: android.hardware.biometrics.BiometricPrompt.AuthenticationResult?) = done(true)
+                // Cancelled, too many tries, and so on: stay locked; the lock screen offers another go.
+                override fun onAuthenticationError(errorCode: Int, errString: CharSequence?) = done(false)
+            })
         } catch (e: Exception) {
             AppLog.e("The unlock prompt couldn't be shown: ${e.message}")
             done(false)
@@ -150,9 +137,6 @@ object AppLock {
     }
 
     private var pending: ((Boolean) -> Unit)? = null
-
-    /** Outcome of the "confirm your screen lock" screen on Android 9 and older. */
-    fun legacyResult(ok: Boolean) = done(ok)
 
     private fun done(ok: Boolean) {
         asking = false

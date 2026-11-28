@@ -34,7 +34,7 @@ object HlsSaver {
         ATTR.findAll(line.substringAfter(':')).associate { it.groupValues[1] to it.groupValues[2].trim('"') }
 
     private fun text(http: OkHttpClient, url: HttpUrl): String =
-        RedGifsApi.download(http, url.toString()).use { it.body?.string().orEmpty() }
+        RedGifsApi.download(http, url.toString()).use { it.text() }
 
     private fun HttpUrl.child(ref: String): HttpUrl = resolve(ref) ?: throw IOException("Bad address in the stream playlist")
 
@@ -149,12 +149,18 @@ object HlsSaver {
     fun estimateTotal(bytes: Long, done: Int, total: Int): Long =
         if (done <= 0 || total <= 0) -1 else if (done >= total) bytes else bytes / done * total + bytes % done * total / done
 
+    private const val MAX_PIECES = 20_000
+    private const val MAX_BYTES = 4L shl 30
+
     /** A stream in more pieces than this isn't asked piece by piece; its size is estimated instead. */
     private const val PROBE_MAX = 400
 
     /** Appends every piece to [into]. A piece that fails is tried three times. */
     private suspend fun fetch(http: OkHttpClient, urls: List<HttpUrl>, into: File, onBytes: suspend (Int) -> Unit, onPiece: () -> Unit = {}) {
         val buf = ByteArray(64 * 1024)
+        // A playlist decides how much is fetched; these bounds keep a broken or hostile one from filling the phone.
+        if (urls.size > MAX_PIECES) throw IOException("The stream has too many pieces (${urls.size})")
+        var total = 0L
         into.outputStream().use { out ->
             for (u in urls) {
                 var attempt = 0
@@ -168,6 +174,8 @@ object HlsSaver {
                                 currentCoroutineContext().ensureActive()
                                 val n = input.read(buf)
                                 if (n < 0) break
+                                total += n
+                                if (total > MAX_BYTES) throw Unsupported("The stream is larger than ${MAX_BYTES shr 30} GB")
                                 out.write(buf, 0, n)
                                 onBytes(n)
                             }

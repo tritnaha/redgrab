@@ -44,14 +44,12 @@ class RedGrabApp : Application(), SingletonImageLoader.Factory {
         runCatching { UpdateWorker.schedule(this) }
         // Remove leftover WhatsApp share copies from earlier sessions.
         Thread { runCatching { WhatsAppShare.cleanUp(this) } }.start()
-        if (Build.VERSION.SDK_INT >= 26) {
-            getSystemService(NotificationManager::class.java).apply {
-                // Neither kind is shown on the lock screen (see Notices).
-                createNotificationChannel(NotificationChannel(CH_PROGRESS, "Progress", NotificationManager.IMPORTANCE_LOW)
-                    .apply { lockscreenVisibility = android.app.Notification.VISIBILITY_SECRET })
-                createNotificationChannel(NotificationChannel(CH_DONE, "Finished", NotificationManager.IMPORTANCE_DEFAULT)
-                    .apply { lockscreenVisibility = android.app.Notification.VISIBILITY_SECRET })
-            }
+        getSystemService(NotificationManager::class.java).apply {
+            // Neither kind is shown on the lock screen (see Notices).
+            createNotificationChannel(NotificationChannel(CH_PROGRESS, "Progress", NotificationManager.IMPORTANCE_LOW)
+                .apply { lockscreenVisibility = android.app.Notification.VISIBILITY_SECRET })
+            createNotificationChannel(NotificationChannel(CH_DONE, "Finished", NotificationManager.IMPORTANCE_DEFAULT)
+                .apply { lockscreenVisibility = android.app.Notification.VISIBILITY_SECRET })
         }
     }
 
@@ -62,7 +60,7 @@ class RedGrabApp : Application(), SingletonImageLoader.Factory {
             .components {
                 add(OkHttpNetworkFetcherFactory(callFactory = { RedGifsApi.clientFor(ua) }))
                 // GIFs and WebPs (imported, or from sex.com) play animated.
-                add(if (Build.VERSION.SDK_INT >= 28) coil3.gif.AnimatedImageDecoder.Factory() else coil3.gif.GifDecoder.Factory())
+                add(coil3.gif.AnimatedImageDecoder.Factory())
             }
             .diskCache { DiskCache.Builder().directory(cacheDir.resolve("thumbs")).maxSizeBytes(200L * 1024 * 1024).build() }
             .crossfade(true)

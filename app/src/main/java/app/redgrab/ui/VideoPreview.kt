@@ -1,5 +1,6 @@
 package app.redgrab.ui
 
+import app.redgrab.*
 import android.graphics.Matrix
 import android.net.Uri
 import android.view.TextureView
@@ -69,7 +70,7 @@ val previewBudget: Float by lazy {
     val rated = runCatching {
         android.media.MediaCodecList(android.media.MediaCodecList.REGULAR_CODECS).codecInfos
             .filter { c -> !c.isEncoder && c.supportedTypes.any { it.equals("video/avc", ignoreCase = true) } }
-            .filter { android.os.Build.VERSION.SDK_INT < 29 || it.isHardwareAccelerated }
+            .filter { it.isHardwareAccelerated }
             .maxOf { c -> runCatching { c.getCapabilitiesForType("video/avc").videoCapabilities?.getSupportedFrameRatesFor(1920, 1080)?.upper ?: 0.0 }.getOrDefault(0.0) }
     }.getOrDefault(0.0).takeIf { it > 0 } ?: 150.0
     (rated / 30.0).toFloat().coerceIn(4f, 24f)

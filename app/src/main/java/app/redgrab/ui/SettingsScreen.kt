@@ -1,5 +1,6 @@
 package app.redgrab.ui
 
+import app.redgrab.*
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
@@ -96,6 +97,8 @@ fun SettingsScreen(vm: MainViewModel, onSignIn: () -> Unit, onOpenLog: () -> Uni
     val pickFolder = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         if (uri != null) vm.setFolder(uri)
     }
+    val pickExport = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri -> if (uri != null) vm.exportAll(uri) }
+    val pickBringIn = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri -> if (uri != null) vm.moveIntoApp(uri) }
     val pickImport = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         if (uri != null) vm.importFolder(uri)
     }
@@ -148,11 +151,41 @@ fun SettingsScreen(vm: MainViewModel, onSignIn: () -> Unit, onOpenLog: () -> Uni
                 )
             }
 
-            Section("Save folder") {
+            Section(if (vm.privateStorage) "Storage" else "Save folder") {
+                var confirmMove by remember { mutableStateOf(false) }
+                if (confirmMove) AlertDialog(
+                    onDismissRequest = { confirmMove = false },
+                    title = { Text("Keep clips inside the app?") },
+                    text = { Text("Everything in the save folder is moved into RedGrab. No gallery or file browser can see it there. Export gives you plain files again. Uninstalling removes the clips unless you choose to keep the app's data.") },
+                    confirmButton = { TextButton(onClick = { confirmMove = false; vm.moveIntoApp() }) { Text("Move all") } },
+                    dismissButton = { TextButton(onClick = { confirmMove = false }) { Text("Cancel") } },
+                )
+                var confirmExport by remember { mutableStateOf(false) }
+                if (confirmExport) AlertDialog(
+                    onDismissRequest = { confirmExport = false },
+                    title = { Text("Export all clips?") },
+                    text = { Text("Plain copies are written to the folder you pick. File browsers and other apps can open them there. The clips in RedGrab stay.") },
+                    confirmButton = { TextButton(onClick = { confirmExport = false; pickExport.launch(null) }) { Text("Pick folder") } },
+                    dismissButton = { TextButton(onClick = { confirmExport = false }) { Text("Cancel") } },
+                )
+                if (vm.privateStorage) {
+                    Row_(Icons.Default.Lock, "Inside the app", vm.storageStatus
+                        ?: ("Only RedGrab can see your clips. Uninstalling, clearing storage or a new phone removes them: export first." +
+                            (vm.lastExport?.let { "\nPlain copies exported: $it" } ?: "")))
+                    Row(Modifier.padding(start = 16.dp, end = 16.dp, bottom = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(onClick = { confirmExport = true }, enabled = vm.storageStatus == null) { Text("Export all") }
+                        // A folder of RedGrab clips from before (an earlier install, another phone) is taken in as it is.
+                        OutlinedButton(onClick = { pickBringIn.launch(null) }, enabled = vm.storageStatus == null) { Text("Bring in a folder") }
+                    }
+                } else {
                 Row_(Icons.Default.Folder, vm.folderLabel ?: "No folder chosen",
-                    "Any folder works, including folders inside Secure Folder and hidden (dot) folders.")
+                    vm.storageStatus ?: "Other apps and file browsers can see this folder.")
                 Row(Modifier.padding(start = 16.dp, end = 16.dp, bottom = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(onClick = { pickFolder.launch(null) }) { Text("Choose folder") }
+                    Button(onClick = { confirmMove = true }, enabled = vm.storageStatus == null) { Text("Keep inside the app") }
+                    OutlinedButton(onClick = { confirmExport = true }, enabled = vm.storageStatus == null && vm.hasFolder) { Text("Export all") }
+                }
+                Row(Modifier.padding(start = 16.dp, end = 16.dp, bottom = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(onClick = { pickFolder.launch(null) }) { Text("Choose folder") }
                     if (vm.hasFolder) OutlinedButton(onClick = { newFolder = "" }) {
                         Icon(Icons.Default.CreateNewFolder, null); Spacer(Modifier.width(6.dp)); Text("New subfolder")
                     }
@@ -160,6 +193,7 @@ fun SettingsScreen(vm: MainViewModel, onSignIn: () -> Unit, onOpenLog: () -> Uni
                 SwitchRow(Icons.Default.VisibilityOff, "Hide from Gallery",
                     "On by default. Adds a .nomedia file so clips stay out of Gallery and other apps' pickers; watch them here instead.",
                     vm.hiddenFromGallery, enabled = vm.hasFolder, onChange = vm::changeHiddenFromGallery)
+                }
                 if (vm.hasFolder) {
                     Row_(Icons.Default.Folder, "Import a folder",
                         vm.importStatus ?: "Moves the GIFs and videos of another folder into RedGrab.")

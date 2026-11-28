@@ -461,6 +461,46 @@ class SourcesTest {
         assertTrue(next.hasMore)
     }
 
+    @Test fun fourChanBoardsAreListedAndABoardIsAskedByName() {
+        val fake = Fake { req ->
+            when (req.url.pathSegments.last()) {
+                "boards.json" -> 200 to """{"boards":[{"board":"gif","title":"Adult GIF","ws_board":0},{"board":"wsg","title":"Worksafe GIF","ws_board":1},
+                    {"board":"../x","title":"bad","ws_board":0},{"board":"hr","title":"High Resolution &amp; more","ws_board":0}]}"""
+                "catalog.json" -> 200 to catalog
+                else -> 200 to thread(req.url.pathSegments.last().removeSuffix(".json").toInt())
+            }
+        }
+        // A board whose name couldn't be part of an address is left out.
+        assertEquals(listOf(FourChanApi.Board("gif", "Adult GIF", true), FourChanApi.Board("wsg", "Worksafe GIF", false), FourChanApi.Board("hr", "High Resolution & more", true)),
+            FourChanApi(fake.http, pauseMs = 0).boards())
+        assertEquals("/boards.json", fake.seen.single().url.encodedPath)
+        // Another board: its catalog, its threads, its files; the clip's ID carries the board.
+        val page = FourChanApi(fake.http, "wsg", pauseMs = 0).threads("", null, 1)
+        assertEquals("/wsg/catalog.json", fake.seen[1].url.encodedPath)
+        assertTrue(fake.seen.drop(2).all { it.url.encodedPath.startsWith("/wsg/thread/") })
+        assertTrue(page.clips.isNotEmpty() && page.clips.all { it.id.startsWith("4c-wsg-") && it.hd!!.startsWith("https://i.4cdn.org/wsg/") && Clip.validId(it.id) })
+        // A board name that isn't one falls back to /gif/ rather than going into an address.
+        FourChanApi(fake.http, "../../etc", pauseMs = 0).threads("", null, 1)
+        assertEquals("/gif/catalog.json", fake.seen.last { it.url.pathSegments.last() == "catalog.json" }.url.encodedPath)
+    }
+
+    @Test fun eromeExploreListsAlbumsLikeASearchDoes() {
+        val fake = Fake { req ->
+            when (req.url.pathSegments.first()) {
+                "explore" -> 200 to """<a href="https://www.erome.com/a/Album01">t</a><a href="https://www.erome.com/a/Album03">t</a>"""
+                "a" -> 200 to eromeAlbum
+                else -> 404 to ""
+            }
+        }
+        val hot = EromeApi(fake.http, pauseMs = 0).explore(newest = false, cursor = null, page = 1)
+        assertEquals("/explore", fake.seen[0].url.encodedPath)
+        assertEquals("1", fake.seen[0].url.queryParameter("page"))
+        assertTrue(hot.clips.isNotEmpty() && hot.clips.all { it.id.startsWith("er-") })
+        fake.seen.clear()
+        EromeApi(fake.http, pauseMs = 0).explore(newest = true, cursor = null, page = 1)
+        assertEquals("/explore/new", fake.seen[0].url.encodedPath)
+    }
+
     @Test fun onlyPicturesAnd4chanFilesAreKeptAsTheirOwnFile() {
         assertTrue(OnlineSource.keepsOwnFile(clip("sx-1", "https://imagex1.sx.cdn.live/a/1.webp")))
         assertTrue(OnlineSource.keepsOwnFile(clip("4c-gif-1", "https://i.4cdn.org/gif/1.mp4")))
@@ -485,10 +525,17 @@ class SourcesTest {
         assertEquals(Feed.EromeSearch("cute girl"), Feed.fromQuery(OnlineSource.EroMe, " cute girl "))
         assertEquals(Feed.EromeUser("Some.One-1"), Feed.fromQuery(OnlineSource.EroMe, "@Some.One-1/?x"))
         assertEquals(Feed.ChanThreads("dance"), Feed.fromQuery(OnlineSource.FourChan, "dance"))
-        assertTrue(Feed.home(OnlineSource.EroMe).needsQuery)
+        // EroMe and sex.com list something by themselves: EroMe its "explore" page, sex.com its most liked GIFs.
+        assertEquals(Feed.EromeExplore(false), Feed.home(OnlineSource.EroMe))
+        assertEquals(Feed.EromeExplore(false), Feed.fromQuery(OnlineSource.EroMe, " "))
+        assertFalse(Feed.home(OnlineSource.EroMe).needsQuery)
         assertFalse(Feed.home(OnlineSource.FourChan).needsQuery)
         assertTrue(Feed.home(OnlineSource.FikFap).needsQuery)
-        assertTrue(Feed.home(OnlineSource.SexCom).needsQuery)
+        assertFalse(Feed.home(OnlineSource.SexCom).needsQuery)
+        assertEquals("Popular", Feed.SexSearch("").title)
+        // 4chan: a board other than /gif/ is part of the feed and of its title.
+        assertEquals("/gif/", Feed.ChanThreads("").title)
+        assertEquals("/wsg/ dance", Feed.ChanThreads("dance", "wsg").title)
         assertFalse(Feed.home(OnlineSource.Reddit).needsQuery)
         // What a feed puts in the search box opens the same feed again (that's how "recent" works).
         for (f in listOf(Feed.Subreddit("videos"), Feed.RedditUser("x"), Feed.FikFapTag("t"), Feed.FikFapUser("u"), Feed.SexSearch("q"),

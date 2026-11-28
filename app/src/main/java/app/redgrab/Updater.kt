@@ -116,7 +116,7 @@ object Updater {
             }
             tokenRefused = token == null && !prefs.githubToken.isNullOrBlank()
             http.newCall(request("$API/releases/latest", token, "application/vnd.github+json").build()).execute().use { r ->
-                val body = r.body?.string().orEmpty()
+                val body = r.text()
                 if (r.code == 404 && repoIsPublic(ctx) == true) {
                     // The repository can be read, so "not found" means nothing has been published yet.
                     prefs.lastUpdateCheck = System.currentTimeMillis()
@@ -193,7 +193,6 @@ object Updater {
 
     /** True only when both signers can be read and they differ; anything unreadable is left to Android's installer to judge. */
     private fun signedDifferently(ctx: Context, apkPath: String): Boolean = runCatching {
-        if (Build.VERSION.SDK_INT < 28) return false
         val pm = ctx.packageManager
         fun certs(i: android.content.pm.PackageInfo?) = i?.signingInfo?.let { si -> (if (si.hasMultipleSigners()) si.apkContentsSigners else si.signingCertificateHistory) }
             ?.map { java.util.Base64.getEncoder().encodeToString(java.security.MessageDigest.getInstance("SHA-256").digest(it.toByteArray())) }?.toSet()
@@ -214,7 +213,7 @@ object Updater {
             val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL).apply {
                 setAppPackageName(ctx.packageName)
                 setSize(apk.length())
-                if (Build.VERSION.SDK_INT >= 31) setRequireUserAction(PackageInstaller.SessionParams.USER_ACTION_NOT_REQUIRED)
+                setRequireUserAction(PackageInstaller.SessionParams.USER_ACTION_NOT_REQUIRED)
             }
             val id = installer.createSession(params)
             installer.openSession(id).use { session ->
@@ -223,7 +222,7 @@ object Updater {
                     session.fsync(out)
                 }
                 val result = Intent(ctx, UpdateReceiver::class.java).setAction(UpdateReceiver.ACTION).putExtra(UpdateReceiver.VERSION, r.version)
-                val flags = PendingIntent.FLAG_UPDATE_CURRENT or (if (Build.VERSION.SDK_INT >= 31) PendingIntent.FLAG_MUTABLE else 0)
+                val flags = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
                 session.commit(PendingIntent.getBroadcast(ctx, id, result, flags).intentSender)
             }
             AppLog.i("Installing update ${r.version} (build ${r.build})")
@@ -245,7 +244,7 @@ object Updater {
                 // Without a token a private repository answers "not found".
                 if (r.code == 404 && ctx.library.prefs.githubToken.isNullOrBlank()) return@runCatching false
                 if (!r.isSuccessful) return@runCatching null
-                !JSONObject(r.body?.string().orEmpty()).optBoolean("private", true)
+                !JSONObject(r.text()).optBoolean("private", true)
             }
         }.getOrNull()
     }
@@ -255,7 +254,7 @@ object Updater {
         val token = ctx.library.prefs.githubToken?.takeIf { it.isNotBlank() } ?: throw java.io.IOException("Add a GitHub token first (Settings → Troubleshooting).")
         val json = JSONObject().put("title", title.take(120)).put("body", body).toString().toRequestBody("application/json".toMediaType())
         RedGifsApi.clientFor(ctx.userAgent).newCall(request("$API/issues", token, "application/vnd.github+json").post(json).build()).execute().use { r ->
-            val text = r.body?.string().orEmpty()
+            val text = r.text()
             if (!r.isSuccessful) throw java.io.IOException(
                 if (r.code == 403 || r.code == 404) "The token can't create issues on this repository (it needs Issues: read and write)."
                 else "GitHub returned an error (HTTP ${r.code}).")
@@ -317,9 +316,7 @@ class UpdateReceiver : BroadcastReceiver() {
         when (val status = intent.getIntExtra(PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_FAILURE)) {
             PackageInstaller.STATUS_PENDING_USER_ACTION -> {
                 // Android wants you to confirm. Shown straight away when the app is open, otherwise from a notification.
-                @Suppress("DEPRECATION")
-                val confirm = (if (Build.VERSION.SDK_INT >= 33) intent.getParcelableExtra(Intent.EXTRA_INTENT, Intent::class.java)
-                else intent.getParcelableExtra(Intent.EXTRA_INTENT)) ?: return
+                val confirm = intent.getParcelableExtra(Intent.EXTRA_INTENT, Intent::class.java) ?: return
                 confirm.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 if (RedGrabApp.inFront && runCatching { ctx.startActivity(confirm) }.isSuccess) return
                 val tap = PendingIntent.getActivity(ctx, NOTIFICATION, confirm, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
