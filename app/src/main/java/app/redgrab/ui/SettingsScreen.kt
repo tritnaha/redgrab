@@ -99,6 +99,7 @@ fun SettingsScreen(vm: MainViewModel, onSignIn: () -> Unit, onOpenLog: () -> Uni
     }
     val pickExport = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri -> if (uri != null) vm.exportAll(uri) }
     val pickBringIn = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri -> if (uri != null) vm.moveIntoApp(uri) }
+    val pickMoveOut = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri -> if (uri != null) vm.moveOutOfApp(uri) }
     val pickImport = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         if (uri != null) vm.importFolder(uri)
     }
@@ -176,6 +177,17 @@ fun SettingsScreen(vm: MainViewModel, onSignIn: () -> Unit, onOpenLog: () -> Uni
                         OutlinedButton(onClick = { confirmExport = true }, enabled = vm.storageStatus == null) { Text("Export all") }
                         // A folder of RedGrab clips from before (an earlier install, another phone) is taken in as it is.
                         OutlinedButton(onClick = { pickBringIn.launch(null) }, enabled = vm.storageStatus == null) { Text("Bring in a folder") }
+                    }
+                    var confirmOut by remember { mutableStateOf(false) }
+                    if (confirmOut) AlertDialog(
+                        onDismissRequest = { confirmOut = false },
+                        title = { Text("Use a visible folder?") },
+                        text = { Text("Every clip is moved out to the folder you pick. File browsers and other apps can see them there.") },
+                        confirmButton = { TextButton(onClick = { confirmOut = false; pickMoveOut.launch(null) }) { Text("Pick folder") } },
+                        dismissButton = { TextButton(onClick = { confirmOut = false }) { Text("Cancel") } },
+                    )
+                    Row(Modifier.padding(start = 16.dp, end = 16.dp, bottom = 12.dp)) {
+                        TextButton(onClick = { confirmOut = true }, enabled = vm.storageStatus == null) { Text("Use a visible folder") }
                     }
                 } else {
                 Row_(Icons.Default.Folder, vm.folderLabel ?: "No folder chosen",

@@ -186,6 +186,10 @@ class LoginActivity : ComponentActivity() {
                 return null
             }
 
+            // The page stays on RedGifs: a link or redirect to another site is not followed here.
+            override fun shouldOverrideUrlLoading(view: WebView, req: WebResourceRequest): Boolean =
+                req.isForMainFrame && !isRedgifs(req.url.toString())
+
             override fun onPageStarted(view: WebView, url: String?, favicon: android.graphics.Bitmap?) {
                 pageHost = runCatching { android.net.Uri.parse(url).host }.getOrNull().orEmpty()
                 onRedgifs = isRedgifs(url)

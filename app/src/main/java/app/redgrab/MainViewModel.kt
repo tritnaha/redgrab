@@ -302,6 +302,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         internal set
 
     init {
+        // Moves and exports run in the background; their progress and outcome are shown here.
+        viewModelScope.launch { StorageJob.status.collect { storageStatus = it } }
+        viewModelScope.launch { StorageJob.finished.collect { m -> if (m != null) { StorageJob.finished.value = null; storageFinished(m) } } }
         // No save folder chosen (a new install): clips are kept inside the app from the start.
         if (prefs.folderUri == null) { prefs.folderUri = PrivateDocs.TREE; prefs.folderLabel = "Inside the app"; privateStorage = true; hasFolder = true; folderLabel = prefs.folderLabel }
         refreshFolderInfo()

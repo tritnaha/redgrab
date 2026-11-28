@@ -12,6 +12,7 @@ import androidx.core.app.NotificationCompat
  */
 object Notices {
     const val SAVING = "Saving"
+    const val MOVING = "Moving files"
     const val CHECK_TITLE = "RedGrab paused"
     const val CHECK = "A quick check is needed. Tap to continue."
     const val SIGN_IN = "Sign in again to keep syncing."

@@ -91,8 +91,12 @@ object AppLock {
         })
     }
 
-    /** Keeps the app's picture out of the recent-apps list. */
-    fun hideFromRecents(a: Activity, hide: Boolean) = a.setRecentsScreenshotEnabled(!hide)
+    /** With the lock on, the app's screens can't be captured: no screenshots, no screen recording or casting, no picture in the recent-apps list. */
+    fun hideFromRecents(a: Activity, hide: Boolean) {
+        a.setRecentsScreenshotEnabled(!hide)
+        if (hide) a.window.addFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE)
+        else a.window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE)
+    }
 
     /** Turned on in Settings: locks from the next time the app comes back; off: nothing stays covered. */
     fun settingChanged(a: Activity, on: Boolean) {

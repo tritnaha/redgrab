@@ -116,8 +116,10 @@ class RedditLoginActivity : ComponentActivity() {
         w.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(view: WebView, req: WebResourceRequest): Boolean {
                 if (isRedirect(req.url)) { onRedirect(req.url); return true }
-                // Only web pages load here; other link types (app links, intents) are ignored.
-                return req.url.scheme != "https"
+                // Only Reddit's own pages load here; other sites and other link types (app links, intents) are not followed.
+                val host = req.url.host?.lowercase().orEmpty()
+                val reddit = req.url.scheme == "https" && (host == "reddit.com" || host.endsWith(".reddit.com"))
+                return req.isForMainFrame && !reddit
             }
 
             override fun onPageStarted(view: WebView, url: String?, favicon: android.graphics.Bitmap?) {

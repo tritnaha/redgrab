@@ -23,6 +23,7 @@
         android:name=".RedGrabApp"
         android:allowBackup="false"
         android:hasFragileUserData="true"
+        android:manageSpaceActivity=".ManageSpaceActivity"
         android:usesCleartextTraffic="false"
         android:fullBackupContent="false"
         android:dataExtractionRules="@xml/data_extraction_rules"
@@ -56,6 +57,13 @@
             android:exported="false"
             android:theme="@style/Theme.RedGrab"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden" />
+
+        <!-- Opened by Android's settings instead of their one-tap "Clear storage" (it warns first). Shows no content. -->
+        <activity
+            android:name=".ManageSpaceActivity"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:theme="@style/Theme.RedGrab" />
 
         <activity
             android:name=".VerifyActivity"

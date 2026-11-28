@@ -416,6 +416,21 @@ class ScreenshotsTest {
             check(File(store, "a-hd.mp4").exists()) { "export removed the app's copy" }
             // A second export copies nothing again.
             check(kotlinx.coroutines.runBlocking { lib.exportTo(outTree) { } } == (0 to 0))
+
+            // The same move as background work, the way the app runs it: it finishes by itself and the app then uses its own storage.
+            File(store, "out").deleteRecursively()
+            val later = File(store, "later").apply { mkdirs() }
+            File(later, "d-hd.mp4").writeBytes(ByteArray(3000) { 4 }); File(later, "e-hd.mp4").writeBytes(ByteArray(1200) { 6 })
+            val laterFolder = android.provider.DocumentsContract.buildDocumentUriUsingTree(PrivateDocs.TREE, "clips/later")
+            lib.prefs.folderUri = laterFolder
+            StorageJob.finished.value = null
+            StorageJob.start(app, StorageJob.IN, laterFolder)
+            val until = System.currentTimeMillis() + 90_000
+            while (lib.prefs.storageJob != null && System.currentTimeMillis() < until) Thread.sleep(500)
+            check(lib.prefs.storageJob == null) { "the background move didn't finish (status: ${StorageJob.status.value})" }
+            check(File(store, "d-hd.mp4").length() == 3000L && File(store, "e-hd.mp4").length() == 1200L && !File(later, "d-hd.mp4").exists()) { "the background move left files behind: ${StorageJob.finished.value}" }
+            check(lib.prefs.folderUri == PrivateDocs.TREE) { "the app didn't switch to its own storage: ${StorageJob.finished.value}" }
+            StorageJob.finished.value = null
         } finally {
             PrivateDocs.dir(app).deleteRecursively()
             lib.prefs.folderUri = before; lib.prefs.folderLabel = label
