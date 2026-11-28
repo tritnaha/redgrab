@@ -474,7 +474,7 @@ internal suspend fun Library.tidyMovedFolder(from: Uri): Boolean = withContext(D
  * in [to] first, so galleries don't pick the copies up. A file already there under the same name is
  * replaced only once the new copy is complete. Returns (copied, failed).
  */
-suspend fun Library.exportTo(to: Uri, onProgress: (String) -> Unit, verified: MutableList<String>? = null): Pair<Int, Int> = withContext(Dispatchers.IO) {
+suspend fun Library.exportTo(to: Uri, onProgress: (String) -> Unit): Pair<Int, Int> = withContext(Dispatchers.IO) {
     val from = prefs.folderUri ?: return@withContext 0 to 0
     val resolver = ctx.contentResolver
     val root = DocumentFile.fromTreeUri(ctx, to) ?: error("Can't write to that folder")
@@ -497,14 +497,13 @@ suspend fun Library.exportTo(to: Uri, onProgress: (String) -> Unit, verified: Mu
             val there = dir.findFile(doc.name)
             if (there != null && there.isDirectory) error("a folder with this name is in the way")
             val sum = resolver.openInputStream(doc.uri)!!.use { sha256(it) }
-            if (there != null && resolver.openInputStream(there.uri)!!.use { sha256(it) } == sum) { verified?.add(path); return@forEachIndexed } // already exported
+            if (there != null && resolver.openInputStream(there.uri)!!.use { sha256(it) } == sum) return@forEachIndexed // already exported
             val out = (dir.createFile("application/octet-stream", doc.name + ".exporting") ?: error("Could not create ${doc.name}")).also { tmp = it }
             resolver.openInputStream(doc.uri)!!.use { input -> resolver.openOutputStream(out.uri, "wt")!!.use { input.copyTo(it, 256 * 1024) } }
             if (resolver.openInputStream(out.uri)!!.use { sha256(it) } != sum) error("the copy doesn't match")
             there?.delete()
             if (!out.renameTo(doc.name)) error("could not name the copy")
             tmp = null
-            verified?.add(path)
             copied++
         } catch (e: kotlinx.coroutines.CancellationException) {
             runCatching { tmp?.delete() }; throw e

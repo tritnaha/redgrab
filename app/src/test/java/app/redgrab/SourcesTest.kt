@@ -185,9 +185,13 @@ class SourcesTest {
 
     @Test fun siteErrorsCarryTheStatusCode() {
         try {
-            FikFapApi(Fake { 404 to """{"message":"Not Found"}""" }.http).tagPosts("nope", null, 1)
+            FikFapApi(Fake { 404 to """{"message":"Not Found"}""" }.http).userPosts("nope", null, 1)
             fail("expected an error")
         } catch (e: HttpException) { assertEquals(404, e.code) }
+        // A hashtag the site doesn't have (it answers 404) is an empty list, not an error.
+        val none = FikFapApi(Fake { 404 to """{"message":"Not Found"}""" }.http).tagPosts("nope", null, 1)
+        assertTrue(none.clips.isEmpty() && !none.hasMore)
+        try { FikFapApi(Fake { 500 to "{}" }.http).tagPosts("x", null, 1); fail("expected an error") } catch (e: HttpException) { assertEquals(500, e.code) }
     }
 
     // ---- Reddit --------------------------------------------------------------------------
