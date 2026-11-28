@@ -1,10 +1,18 @@
 # Runs the app's code for 4chan, EroMe, sex.com, FikFap and Reddit against the real sites, from
-# GitHub's runner. Started by hand only. It prints counts, never titles, names or addresses.
+# GitHub's runner. Started by hand, or by a push that changes the site code or this test.
+# It prints counts, never titles, names or addresses.
 # A site that refuses the runner or shows a bot check is reported as blocked; nothing gets around it.
 name: Live sites
 
 on:
   workflow_dispatch:
+  push:
+    branches: [online-sources]
+    paths:
+      - '.github/workflows/live-sites.yml'
+      - 'app/src/test/java/app/redgrab/LiveSitesTest.kt'
+      - 'app/src/main/java/app/redgrab/Sources.kt'
+      - 'app/src/main/java/app/redgrab/MoreSources.kt'
 
 permissions:
   contents: read
