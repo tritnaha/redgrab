@@ -473,7 +473,7 @@ internal suspend fun Library.tidyMovedFolder(from: Uri): Boolean = withContext(D
  * in [to] first, so galleries don't pick the copies up. A file already there under the same name is
  * replaced only once the new copy is complete. Returns (copied, failed).
  */
-suspend fun Library.exportTo(to: Uri, onProgress: (String) -> Unit, @Suppress("UNUSED_PARAMETER") marker: Boolean = true): Pair<Int, Int> = withContext(Dispatchers.IO) {
+suspend fun Library.exportTo(to: Uri, onProgress: (String) -> Unit): Pair<Int, Int> = withContext(Dispatchers.IO) {
     val from = prefs.folderUri ?: return@withContext 0 to 0
     val resolver = ctx.contentResolver
     val root = DocumentFile.fromTreeUri(ctx, to) ?: error("Can't write to that folder")

@@ -91,7 +91,7 @@ class StorageWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ct
                 }
                 StorageJob.OUT -> {
                     // Verified copies first (as an export), then the folder becomes the save folder, then the copies inside go.
-                    val (copied, failed) = lib.exportTo(folder, progress, marker = true)
+                    val (copied, failed) = lib.exportTo(folder, progress)
                     if (failed > 0) "%,d copied, %,d couldn't be (see the log). Nothing was removed; run it again.".format(copied, failed)
                     else {
                         prefs.folderUri = folder; prefs.folderLabel = label.ifBlank { "Folder" }
