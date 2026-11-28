@@ -6,6 +6,25 @@ time it opens after an update, and the whole list under Settings → About → W
 Each version has the sections it needs out of Added, Changed and Fixed, one line per change,
 and a link to the code that made it.
 
+## 13.15 (build 28) · 2026-11-27
+
+### Added
+- Clips can be kept inside the app, where no gallery, file browser or computer on a cable can see them. New installs start that way.
+- Settings → Save folder → "Keep inside the app" moves everything from the save folder in at once; an interrupted move carries on when started again.
+- "Export all" copies every saved file out as plain MP4/GIF files into a folder you pick. Nothing is removed from the app.
+- When uninstalling, Android now offers to keep the app's data, so the clips are still there after installing again.
+- "Bring in a folder" takes a folder of RedGrab clips from before (an earlier install, another phone) into the app.
+- Each file moved in is read back and compared with its original before the original is deleted.
+- Exported folders get a marker that keeps galleries from showing the copies; the export asks first.
+
+### Changed
+- Sharing to WhatsApp, editing, importing and previews work the same with clips kept inside the app.
+- Downloads, imports and folder changes wait while a move or export is running.
+
+### Fixed
+- "Overwrite original" on an imported clip put the edited file in the wrong place and lost the original.
+- Importing two files with the same name could write one over the other.
+
 ## 13.14 (build 27) · 2026-11-27
 
 ### Added
@@ -19,6 +38,8 @@ and a link to the code that made it.
 
 ### Fixed
 - Release checks: the app's own updater is now run end to end on an emulator (older version finds, downloads and installs the new one).
+
+[Details](https://github.com/tritnaha/redgrab/commit/d37ce53)
 
 ## 13.13 (build 26) · 2026-11-27
 
