@@ -122,6 +122,8 @@ class Prefs(context: Context) : RedditStore {
     var wall: Boolean by bool("wall", false)
     /** Previews per row (2..6). */
     var columns: Int by int("columns", 3, within = 2..6)
+    /** The order of the Saved grid ([Sort] name); null = last saved first. */
+    var sort: String? by text("sort")
     /** Selected design theme ID. */
     var theme: String? by text("theme")
     /** Where the page indicator was dragged to, in pixels from its usual place (bottom right). */

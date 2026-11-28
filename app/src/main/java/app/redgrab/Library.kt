@@ -51,7 +51,7 @@ class Library(internal val ctx: Context) {
             nicheNames = store.niches().associate { it.id to it.name }
             fileIndex = store.files().associate { it.name to (it.size to it.sha) }
             _state.value = LibraryState(
-                clips = compose(), qualities = readHistory(), lastSynced = prefs.lastSynced,
+                clips = compose(), qualities = readHistory(), savedAt = readSavedAt(), lastSynced = prefs.lastSynced,
                 failures = store.failures().associate { it.id to Failure(it.reason, it.firstAt, it.lastAt, it.attempts, it.dead) },
                 history = store.syncs().map { SyncRecord(it.time, it.total, it.added, it.removed, it.saved) },
                 performers = store.performers().associate { it.key to it.toPerformer() },

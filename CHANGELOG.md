@@ -6,6 +6,16 @@ time it opens after an update, and the whole list under Settings → About → W
 Each version has the sections it needs out of Added, Changed and Fixed, one line per change,
 and a link to the code that made it.
 
+## 13.17 (build 30) · 2026-11-28
+
+### Added
+- Saved: a sort button in the top bar. The order you pick is kept until you change it.
+- New order "Last saved", now the default: the clip you saved most recently is first, whichever site it came from.
+- SFW mode: double-tap a clip, or the paused Online tab, and confirm with the phone's unlock to turn it off.
+
+### Fixed
+- Clips saved from the Online tab were listed last, after everything from your likes.
+
 ## 13.16 (build 29) · 2026-11-28
 
 ### Added
@@ -23,6 +33,8 @@ and a link to the code that made it.
 ### Fixed
 - sex.com has no list without a search (the site refuses it); the "Popular" shortcut is gone.
 - A FikFap hashtag that doesn't exist showed an error instead of an empty list.
+
+[Details](https://github.com/tritnaha/redgrab/commit/72c68bf)
 
 ## 13.15 (build 28) · 2026-11-27
 

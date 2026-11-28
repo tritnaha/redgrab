@@ -58,7 +58,8 @@ A content filter (straight, lesbian, gay, trans, bisexual, animated) applies to 
 **Other**
 - Trim, mute and save edited copies
 - Share to WhatsApp
-- SFW mode (blurs previews, blocks playback)
+- SFW mode (blurs previews, blocks playback; double-tap and unlock to turn off)
+- Sort saved clips: last saved, liked order, upload date and more
 - App lock using the phone's fingerprint, face, PIN, pattern or password; while on, the app can't be screenshotted or recorded
 - Updates itself from this repository's releases (Android asks once to allow it)
 - Changelog shown after each update

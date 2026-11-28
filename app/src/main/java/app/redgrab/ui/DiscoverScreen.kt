@@ -70,7 +70,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
@@ -211,7 +213,10 @@ fun DiscoverScreen(vm: MainViewModel, onSignIn: () -> Unit, onOpenSettings: () -
             source == OnlineSource.Reddit && vm.redditClientId.isBlank() -> { Notice(notice, title = "Reddit needs a client ID", action = "Settings", onAction = onOpenSettings); return@Scaffold }
             // SFW mode: online browsing is paused entirely; no thumbnails are fetched.
             vm.sfw -> {
-                Notice(notice, Icons.Default.VisibilityOff, "Online browsing is paused in SFW mode", "Nothing is loaded while SFW mode is on.", "Turn off SFW mode") { vm.changeSfw(false) }
+                // A double tap anywhere asks for the phone's unlock and then turns SFW mode off.
+                val confirmIdentity = LocalConfirmIdentity.current
+                Notice(notice.pointerInput(Unit) { detectTapGestures(onDoubleTap = { confirmIdentity("Turn off SFW mode") { ok -> if (ok) vm.changeSfw(false) } }) },
+                    Icons.Default.VisibilityOff, "Online browsing is paused in SFW mode", "Nothing is loaded while SFW mode is on.", "Turn off SFW mode") { vm.changeSfw(false) }
                 return@Scaffold
             }
             vm.offline -> { Notice(notice, Icons.Default.CloudOff, "You're offline", "Online browsing needs a connection. Everything on the Saved tab still works."); return@Scaffold }

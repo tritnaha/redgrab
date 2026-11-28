@@ -129,6 +129,18 @@ class SearchTest {
         assertNull(url.queryParameter("query"))
     }
 
+    @Test fun lastSavedComesFirstWhereverItIsFrom() {
+        fun clip(id: String) = Clip(id = id, hd = "https://x/$id.mp4", sd = null, thumb = null, duration = 1.0, width = 1, height = 1, hasAudio = false,
+            user = "", created = 0, sources = setOf("Liked"))
+        val clips = listOf(clip("liked1"), clip("liked2"), clip("unsaved"), clip("ff-9"), clip("er-a-1"))
+        val state = LibraryState(clips = clips, qualities = clips.filter { it.id != "unsaved" }.associate { it.id to setOf(Quality.HD) },
+            savedAt = mapOf("liked1" to 100L, "liked2" to 300L, "ff-9" to 500L, "er-a-1" to 400L))
+        // A clip saved from another site just now is first; what isn't on the phone keeps its place at the end.
+        assertEquals(listOf("ff-9", "er-a-1", "liked2", "liked1", "unsaved"), visibleClips(state, Filter.All, "", null, AdvFilters(sort = Sort.Saved)).map { it.id })
+        assertEquals(Sort.Saved, AdvFilters().sort)
+        assertEquals(clips.map { it.id }, visibleClips(state, Filter.All, "", null, AdvFilters(sort = Sort.Liked)).map { it.id })
+    }
+
     @Test fun oversizedAnswersAreRefusedNotRead() {
         fun response(size: Int) = Response.Builder().request(Request.Builder().url("https://example.com/").build()).protocol(Protocol.HTTP_1_1)
             .code(200).message("OK").body("x".repeat(size).toResponseBody("application/json".toMediaType())).build()

@@ -170,7 +170,7 @@ internal suspend fun Library.sync(asked: Boolean): Result<Unit> =
                 store.trimSyncs()
                 val clips = compose()
                 _state.update {
-                    it.copy(clips = clips, qualities = qualities, refreshing = false, refreshMessage = "",
+                    it.copy(clips = clips, qualities = qualities, savedAt = readSavedAt(), refreshing = false, refreshMessage = "",
                         lastSynced = now, likedTotal = likedTotal, history = history, performers = performers, partial = scan.second,
                         unseen = unseen)
                 }

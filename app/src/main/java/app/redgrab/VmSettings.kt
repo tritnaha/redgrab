@@ -261,3 +261,7 @@ internal fun MainViewModel.storageFinished(message: String) {
     rescanFolder(force = true)
     say(message)
 }
+
+/** The order of the Saved grid; remembered. */
+fun MainViewModel.changeSort(o: Sort) { prefs.sort = o.name; adv = adv.copy(sort = o) }
+

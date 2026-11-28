@@ -32,7 +32,7 @@ data class Facet(val kind: Kind, val value: String) {
 }
 
 enum class Sort(val label: String) {
-    Liked("Liked order"), Newest("Newest upload"), Oldest("Oldest upload"), Views("Most viewed"),
+    Saved("Last saved"), Liked("Liked order"), Newest("Newest upload"), Oldest("Oldest upload"), Views("Most viewed"),
     Likes("Most liked"), Longest("Longest"), Shortest("Shortest"),
 }
 
@@ -43,7 +43,7 @@ enum class Length(val label: String, val range: ClosedFloatingPointRange<Double>
 
 /** Extra filters from the "Filters" sheet. Null/Any = don't filter. */
 data class AdvFilters(
-    val sort: Sort = Sort.Liked,
+    val sort: Sort = Sort.Saved,
     val length: Length = Length.Any,
     val vertical: Boolean? = null,
     val sound: Boolean? = null,
@@ -80,6 +80,8 @@ fun visibleClips(s: LibraryState, filter: Filter, query: String, facet: Facet?, 
             words.all { c.searchText.contains(it) }
     }.let { list ->
         when (adv.sort) {
+            // What you saved last comes first, wherever it is from; clips not on the phone follow in their usual order.
+            Sort.Saved -> list.sortedByDescending { s.savedAt[it.id] ?: 0L }
             Sort.Liked -> list
             Sort.Newest -> list.sortedByDescending { it.created }
             Sort.Oldest -> list.sortedBy { it.created }

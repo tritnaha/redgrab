@@ -28,7 +28,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Progress text while a folder is being imported; null when idle. */
     var importStatus by mutableStateOf<String?>(null)
         internal set
-    var adv by mutableStateOf(AdvFilters())
+    var adv by mutableStateOf(AdvFilters(sort = Sort.entries.firstOrNull { it.name == prefs.sort } ?: Sort.Saved))
     var discover by mutableStateOf(DiscoverState(feed = Feed.home(
         startViewOf(prefs.startView).second ?: OnlineSource.entries.firstOrNull { it.name == prefs.onlineSource } ?: OnlineSource.RedGifs)))
         internal set

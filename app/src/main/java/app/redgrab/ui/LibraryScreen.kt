@@ -13,6 +13,7 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.material.icons.automirrored.filled.Sort
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -184,6 +185,8 @@ fun LibraryScreen(vm: MainViewModel, snack: SnackbarHostState, onSignIn: () -> U
     var showFilters by remember { mutableStateOf(false) }
     var showView by remember { mutableStateOf(false) }
     var confirmSfwOff by remember { mutableStateOf(false) }
+    val confirmIdentity = LocalConfirmIdentity.current
+    val unlockSfw: () -> Unit = { confirmIdentity("Turn off SFW mode") { ok -> if (ok) vm.changeSfw(false) } }
     var confirmSaveAll by remember { mutableStateOf(false) }
     var selMenu by remember { mutableStateOf(false) }
     var menu by remember { mutableStateOf(false) }
@@ -297,6 +300,17 @@ fun LibraryScreen(vm: MainViewModel, snack: SnackbarHostState, onSignIn: () -> U
                                 Icon(Icons.Default.CloudDownload, "Save all %,d clips that aren't on this phone yet".format(s.newCount))
                             }
                         }
+                        // The order of the grid.
+                        Box {
+                            var sortMenu by remember { mutableStateOf(false) }
+                            IconButton(onClick = { sortMenu = true }) { Icon(Icons.AutoMirrored.Filled.Sort, "Sort: ${vm.adv.sort.label}") }
+                            androidx.compose.material3.DropdownMenu(sortMenu, { sortMenu = false }) {
+                                Sort.entries.forEach { o ->
+                                    androidx.compose.material3.DropdownMenuItem(text = { Text(o.label) }, onClick = { sortMenu = false; vm.changeSort(o) },
+                                        trailingIcon = { if (o == vm.adv.sort) Icon(Icons.Default.Check, "Selected") })
+                                }
+                            }
+                        }
                         IconButton(onClick = { if (vm.sfw) confirmSfwOff = true else vm.changeSfw(true) }) {
                             Icon(if (vm.sfw) Icons.Default.VisibilityOff else Icons.Default.Visibility,
                                 if (vm.sfw) "SFW mode on (tap to turn off)" else "Turn on SFW mode",
@@ -387,7 +401,7 @@ fun LibraryScreen(vm: MainViewModel, snack: SnackbarHostState, onSignIn: () -> U
                                     )
                                 }
                                 FilterChip(
-                                    selected = vm.adv.activeCount > 0 || vm.adv.sort != Sort.Liked,
+                                    selected = vm.adv.activeCount > 0,
                                     onClick = { showFilters = true },
                                     label = { Text(if (vm.adv.activeCount > 0) "${vm.adv.activeCount}" else "Filters") },
                                     leadingIcon = { Icon(Icons.Default.Tune, null, Modifier.size(18.dp)) },
@@ -487,6 +501,8 @@ fun LibraryScreen(vm: MainViewModel, snack: SnackbarHostState, onSignIn: () -> U
                         selected = clip.id in vm.selection,
                         selecting = selecting,
                         onClick = { if (selecting) vm.toggle(clip.id) else vm.openPlayer(shown, shown.indexOf(clip)) },
+                        // In SFW mode a double tap asks for the phone's unlock and then shows the clips again.
+                        onDoubleClick = if (vm.sfw) unlockSfw else null,
                         onLongClick = { vm.toggle(clip.id) },
                     )
                 }
@@ -667,7 +683,7 @@ private fun DownloadCard(p: DownloadProgress, failedCount: Int, vm: MainViewMode
 @Composable
 private fun ClipTile(
     clip: Clip, unseen: Boolean, thumb: Any?, wall: Boolean, corner: Dp, compact: Boolean, preview: (@Composable () -> Unit)?, saved: Boolean, qualities: Set<Quality>, partial: Boolean, sfw: Boolean, failed: Boolean, dead: Boolean = false, spot: Boolean = false, downloading: Boolean,
-    selected: Boolean, selecting: Boolean, onClick: () -> Unit, onLongClick: () -> Unit,
+    selected: Boolean, selecting: Boolean, onClick: () -> Unit, onLongClick: () -> Unit, onDoubleClick: (() -> Unit)? = null,
 ) {
     val haptic = LocalHapticFeedback.current
     val scale by animateFloatAsState(if (selected) 0.92f else 1f, label = "sel")
@@ -684,6 +700,7 @@ private fun ClipTile(
             .combinedClickable(
                 onClick = onClick,
                 onLongClick = { haptic.performHapticFeedback(HapticFeedbackType.LongPress); onLongClick() },
+                onDoubleClick = onDoubleClick,
             ),
     ) {
         AsyncImage(
