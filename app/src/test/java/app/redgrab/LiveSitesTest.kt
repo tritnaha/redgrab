@@ -252,4 +252,72 @@ class LiveSitesTest {
             say("sx? $label → ${g.code} loc=${g.location} pins=${Regex("class=\"image_wrapper\"").findAll(g.body).count()} next=${"rel=\"next\"" in g.body}")
         }
     }
+
+    /** Second round: the two listings the site's own pages name, /portal/api/gifs and /portal/api/tags/:tagId/gifs. Shapes only. */
+    @Test fun sexComListings() {
+        assumeTrue("set REDGRAB_LIVE_SITES=1 to run against the real sites", System.getenv("REDGRAB_LIVE_SITES") == "1")
+        val api = "https://www.sex.com/portal/api"
+        fun fetch(url: String, json: Boolean = true): Pair<Int, String>? = runCatching {
+            Thread.sleep(900)
+            http.newCall(Request.Builder().url(url).header("Accept", if (json) "application/json" else "text/html").build()).execute().use { r ->
+                r.code to String(r.body?.byteStream()?.readNBytes(4_000_000) ?: ByteArray(0), Charsets.UTF_8) }
+        }.onFailure { say("sx2 $url → ${it.javaClass.simpleName}") }.getOrNull()
+        fun describe(label: String, url: String): List<String> {
+            val (code, body) = fetch(url) ?: return emptyList()
+            val line = StringBuilder("sx2 $label → $code")
+            var ids = emptyList<String>()
+            if (code in 200..299) runCatching {
+                val j = org.json.JSONObject(body); val data = j.optJSONArray("data")
+                line.append(" keys=${j.keys().asSequence().sorted().toList()} paging=${j.optJSONObject("paging")?.keys()?.asSequence()?.sorted()?.toList()} pages=${j.optJSONObject("paging")?.optInt("numberOfPages")}")
+                if (data != null) {
+                    ids = (0 until data.length()).mapNotNull { data.optJSONObject(it)?.opt("id")?.toString() }
+                    val d = (0 until data.length()).mapNotNull { n -> Regex("/(\\d{4})/(\\d{2})/(\\d{2})/").find(data.optJSONObject(n)?.optString("uri").orEmpty())?.groupValues?.drop(1)?.joinToString("-") }
+                    line.append(" items=${data.length()} fields=" + data.optJSONObject(0)?.let { o -> o.keys().asSequence().sorted().map { k -> "$k:${o.opt(k)?.javaClass?.simpleName?.take(6)}" }.toList() })
+                    if (d.isNotEmpty()) line.append(" fileDates=${d.min()}..${d.max()} newestFirst=${d == d.sortedDescending()}")
+                    line.append(" ext=" + (0 until data.length()).map { data.optJSONObject(it)?.optString("uri").orEmpty().substringAfterLast('.') }.groupingBy { it }.eachCount())
+                }
+            }.onFailure { line.append(" (not JSON, ${body.length} chars)") } else line.append(" body=" + body.take(160).replace(Regex("\\s+"), " "))
+            say(line.toString())
+            return ids
+        }
+        // What the pages say around those two paths (long quoted texts cut, so no titles come along).
+        val home = fetch("https://www.sex.com/en/gifs", json = false)?.second.orEmpty()
+        fun around(key: String, text: String, n: Int = 3) = Regex(".{0,220}" + Regex.escape(key) + ".{0,260}").findAll(text).take(n).forEach { m ->
+            say("sx2 near $key: " + m.value.replace(Regex("https?://[^\"'\\\\ ]+"), "URL").replace(Regex("[A-Za-z0-9+/=_-]{40,}"), "…")) }
+        around("/portal/api/gifs", home); around("tags/:tagId", home, 2); around("tagId", home, 4)
+        say("sx2 words for saved lists: " + Regex("[A-Za-z]*(?:ollection|laylist|avorite|aller|oard)[A-Za-z]*").findAll(home).map { it.value }.groupingBy { it }.eachCount().entries.sortedByDescending { it.value }.take(40).joinToString { "${it.key}×${it.value}" })
+
+        // 1. The plain listing: which parameters does it want?
+        val o = "sexual-orientation=straight"
+        var first = emptyList<String>()
+        for ((label, query) in listOf("orientation+page+limit" to "$o&page=1&limit=40", "orientation only" to o, "page+limit" to "page=1&limit=40", "order=likeCount" to "order=likeCount&$o&page=1&limit=40",
+            "order=createdAt" to "order=createdAt&$o&page=1&limit=40", "order=trending" to "order=trending&$o&page=1&limit=40", "order=newest" to "order=newest&$o&page=1&limit=40",
+            "order=viewCount" to "order=viewCount&$o&page=1&limit=40", "sort=latest" to "sort=latest&$o&page=1&limit=40", "page 2" to "$o&page=2&limit=40", "orientation=gay" to "sexual-orientation=gay&page=1&limit=40")) {
+            val ids = describe("gifs?$label", "$api/gifs?$query")
+            if (ids.isNotEmpty()) { if (first.isEmpty()) first = ids else say("sx2   …shares ${ids.count { it in first }} of ${ids.size} with the first listing, same first 10: ${ids.take(10) == first.take(10)}") }
+        }
+        // 2. Tags by ID: where do IDs come from? A category page and a picture's page may carry them.
+        val cats = fetch("https://www.sex.com/en/categories", json = false)?.second.orEmpty()
+        say("sx2 categories page: ${Regex("href=\"/en/categories/([a-z0-9\\-]+)\"").findAll(cats).map { it.groupValues[1] }.distinct().count()} category links; id-like fields: " +
+            Regex("\\\\?\"([A-Za-z]*[iI]d)\\\\?\":").findAll(cats).map { it.groupValues[1] }.groupingBy { it }.eachCount().entries.sortedByDescending { it.value }.take(15).joinToString { "${it.key}×${it.value}" })
+        around("tagId", cats, 2); around("/portal/api/", cats, 3)
+        val slug = Regex("href=\"/en/categories/([a-z0-9\\-]+)\"").find(cats)?.groupValues?.get(1)
+        if (slug != null) {
+            val page = fetch("https://www.sex.com/en/categories/$slug", json = false)?.second.orEmpty()
+            say("sx2 one category page: ${page.length} chars; API paths: " + Regex("/portal/api/[A-Za-z0-9_/\\-:]+").findAll(page).map { it.value }.distinct().take(12).toList() +
+                "; id-like fields: " + Regex("\\\\?\"([A-Za-z]*[iI]d)\\\\?\":").findAll(page).map { it.groupValues[1] }.groupingBy { it }.eachCount().entries.sortedByDescending { it.value }.take(12).joinToString { "${it.key}×${it.value}" })
+            around("tagId", page, 3)
+            val tagIds = Regex("\\\\?\"tagId\\\\?\":\\\\?\"?(\\d+)").findAll(page).map { it.groupValues[1] }.distinct().take(3).toList() +
+                Regex("tags/(\\d+)/gifs").findAll(page).map { it.groupValues[1] }.distinct().take(2).toList()
+            say("sx2 tag IDs found on that page: ${tagIds.size}")
+            tagIds.distinct().take(2).forEach { id -> describe("tags/{id}/gifs", "$api/tags/$id/gifs?$o&page=1&limit=40"); describe("tags/{id}/gifs no params", "$api/tags/$id/gifs") }
+        }
+        // 3. Small guesses for a tag by its name or a low number
+        for (path in listOf("tags/1/gifs?$o&page=1&limit=40", "tags/dance/gifs?$o&page=1&limit=40", "tags/1", "tags?search=da&$o", "gifs/tags?search=da", "categories/gifs?$o", "gifs/1")) describe("guess $path", "$api/$path")
+        // 4. A signed-out look at what the site says an account has (no sign-in is made)
+        for (path in listOf("user/my-content/gifs", "user/my-content/collections", "user/my-content/playlists", "user/my-content/favorites", "user/my-content/likes", "user/me")) {
+            val (code, body) = fetch("$api/$path") ?: continue
+            say("sx2 account path $path → $code ${body.take(40).replace(Regex("\\s+"), " ")}")
+        }
+    }
 }
