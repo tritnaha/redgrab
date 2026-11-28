@@ -41,7 +41,7 @@ Taken on an emulator with made-up clips. The thumbnails are drawn by the screens
 | RedGifs | My feed (followed niches and tags), For you, search with suggestions, exact tags, niche browser, creator, related | RedGifs sign-in |
 | Reddit | front page, subreddit (with suggestions), user, your saved/upvoted | a client ID |
 | FikFap | hashtag, user; followed hashtags | nothing |
-| sex.com | most liked GIFs, GIF search; followed searches | nothing |
+| sex.com | GIF search; followed searches | nothing |
 | EroMe | Hot, New, search, user; followed searches | nothing |
 | 4chan | boards, threads, thread search; followed searches | nothing |
 
@@ -58,8 +58,9 @@ A content filter (straight, lesbian, gay, trans, bisexual, animated) applies to 
 **Other**
 - Trim, mute and save edited copies
 - Share to WhatsApp
-- SFW mode (blurs previews, blocks playback)
-- App lock using the phone's fingerprint, face, PIN, pattern or password
+- SFW mode (blurs previews, blocks playback; double-tap and unlock to turn off)
+- Sort saved clips: last saved, liked order, upload date and more
+- App lock using the phone's fingerprint, face, PIN, pattern or password; while on, the app can't be screenshotted or recorded
 - Updates itself from this repository's releases (Android asks once to allow it)
 - Changelog shown after each update
 
@@ -91,7 +92,7 @@ Reddit needs a client ID, unless the build carries one (`-PredditClientId=…`, 
 - No analytics, no ads, no servers of its own. The app talks only to the sites you browse and to GitHub for updates.
 - Notifications never name a site or a clip and stay off the lock screen.
 - The activity log stays inside the app; copies and reports have sign-ins removed.
-- Clips can be kept inside the app's own storage, which no gallery, file browser or USB connection can list (the default for new installs; Settings → Save folder → "Keep inside the app" moves an existing folder in). "Export all" writes plain files out again. Android offers to keep the app's data on uninstall.
+- Clips can be kept inside the app's own storage, which no gallery, file browser or USB connection can list (the default for new installs; Settings → Save folder → "Keep inside the app" moves an existing folder in). "Export all" writes plain copies out; "Use a visible folder" moves everything back out. Android offers to keep the app's data on uninstall, and its "Clear storage" opens a warning first.
 - With a save folder instead, clips are ordinary files there, and the app lock covers the app, not that folder.
 - The built-in browser's cookies are stored like any browser's and are removed when you sign out.
 
@@ -186,7 +187,7 @@ Built with Kotlin, Jetpack Compose, Media3, Room, WorkManager, OkHttp and Coil.
 
 ## Known limits
 
-- Clients for Reddit, FikFap, sex.com, EroMe and 4chan are written from open-source extractor code and public API documentation and have not been run against the live sites from the build environment. EroMe's Hot/New lists and 4chan's board list are not in any extractor.
+- 4chan, EroMe, sex.com and FikFap are checked against the real sites by the "Live sites" workflow (feeds, paging, files). Reddit is checked there too once a client ID is set; until then its code has not been run against the site.
 - Following on sites other than RedGifs and Reddit is kept in the app, not on the site.
 - Reddit-hosted videos are saved without sound.
 - 4chan clips are mostly WebM, which some apps won't play or accept.

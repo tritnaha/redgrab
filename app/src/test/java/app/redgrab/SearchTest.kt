@@ -129,6 +129,40 @@ class SearchTest {
         assertNull(url.queryParameter("query"))
     }
 
+    @Test fun lastSavedComesFirstWhereverItIsFrom() {
+        fun clip(id: String) = Clip(id = id, hd = "https://x/$id.mp4", sd = null, thumb = null, duration = 1.0, width = 1, height = 1, hasAudio = false,
+            user = "", created = 0, sources = setOf("Liked"))
+        val clips = listOf(clip("liked1"), clip("liked2"), clip("unsaved"), clip("ff-9"), clip("er-a-1"))
+        val state = LibraryState(clips = clips, qualities = clips.filter { it.id != "unsaved" }.associate { it.id to setOf(Quality.HD) },
+            savedAt = mapOf("liked1" to 100L, "liked2" to 300L, "ff-9" to 500L, "er-a-1" to 400L))
+        // A clip saved from another site just now is first; what isn't on the phone keeps its place at the end.
+        assertEquals(listOf("ff-9", "er-a-1", "liked2", "liked1", "unsaved"), visibleClips(state, Filter.All, "", null, AdvFilters(sort = Sort.Saved)).map { it.id })
+        assertEquals(Sort.Saved, AdvFilters().sort)
+        assertEquals(clips.map { it.id }, visibleClips(state, Filter.All, "", null, AdvFilters(sort = Sort.Liked)).map { it.id })
+    }
+
+    @Test fun wronglyRecordedSavedFilesAreFoundAgain() {
+        fun row(id: String, file: String?, pos: Int) = ClipRow.of(Clip(id = id, hd = null, sd = null, thumb = null, duration = 0.0, width = 1, height = 1,
+            hasAudio = false, user = "", created = 0, sources = emptySet(), copyFile = file), ClipRow.IMPORTED, pos)
+        val bad = "app.redgrab.Library\$Companion@1a2b3c.IMPORT_DIR"
+        val rows = listOf(row("imp-old", "imported/old.gif", 0), row("sx-12", "$bad/sx-12.gif", 1), row("imp-sx-12", "app.redgrab.Library\$Companion@ffff.IMPORT_DIR/sx-12.gif", 2),
+            row("imp-old-2", "$bad/old.gif", 3), row("imp-new", "$bad/new.mp4", 4), row("imp-new-2", "$bad/new.mp4", 5))
+        val (kept, gone) = Library.repairImports(rows)
+        assertEquals(listOf("imp-old" to "imported/old.gif", "sx-12" to "imported/sx-12.gif", "imp-new" to "imported/new.mp4"), kept.map { it.id to it.file })
+        assertEquals(listOf("imp-sx-12", "imp-old-2", "imp-new-2"), gone)
+        // Nothing wrong: nothing changes.
+        assertEquals(kept to emptyList<String>(), Library.repairImports(kept))
+        assertEquals(null, Library.repairedImportPath("imported/a.gif"))
+    }
+
+    /** "$Name.CONSTANT" in a string prints the object and then the text ".CONSTANT": how saved files got lost in 13.14. */
+    @Test fun noStringPrintsAnObjectWhereAConstantWasMeant() {
+        val wrong = Regex("\\$[A-Z][A-Za-z0-9]*\\.[A-Z][A-Z_0-9]+")
+        val hits = java.io.File("src/main/java").walkTopDown().filter { it.extension == "kt" }
+            .flatMap { f -> f.readLines().mapIndexedNotNull { i, l -> if (wrong.containsMatchIn(l) && !l.trimStart().startsWith("*") && !l.trimStart().startsWith("//")) "${f.name}:${i + 1}" else null } }.toList()
+        assertEquals(emptyList<String>(), hits)
+    }
+
     @Test fun oversizedAnswersAreRefusedNotRead() {
         fun response(size: Int) = Response.Builder().request(Request.Builder().url("https://example.com/").build()).protocol(Protocol.HTTP_1_1)
             .code(200).message("OK").body("x".repeat(size).toResponseBody("application/json".toMediaType())).build()

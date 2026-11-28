@@ -240,8 +240,8 @@ class NichesTest {
 
     @Test fun allSitesAsksEachSiteThatCanAnswer() {
         fun feeds(q: String, redGifs: Boolean, reddit: Boolean, personal: Boolean) = AllSites.feeds(q, redGifs, reddit, personal).map { it.feed }
-        // Nothing typed: what each site lists by itself, and only the sites that are set up. FikFap has nothing without a hashtag.
-        val own = listOf(Feed.SexSearch(""), Feed.EromeExplore(false), Feed.ChanThreads(""))
+        // Nothing typed: what each site lists by itself, and only the sites that are set up. FikFap and sex.com have nothing without a search.
+        val own = listOf(Feed.EromeExplore(false), Feed.ChanThreads(""))
         assertEquals(listOf(Feed.MyNiches, Feed.RedditHome) + own, feeds("", redGifs = true, reddit = true, personal = true))
         assertEquals(listOf<Feed>(Feed.Search("")) + own, feeds("", redGifs = true, reddit = false, personal = false))
         assertEquals(own, feeds(" ", redGifs = false, reddit = false, personal = false))
@@ -261,7 +261,7 @@ class NichesTest {
         // Two of a site's follows a page, taking turns; a site with one follow shows it every page; a site without shows its own list.
         assertEquals(
             listOf("RedGifs" to Feed.MyNiches, "FikFap|dance" to Feed.FikFapTag("dance"), "FikFap|beach" to Feed.FikFapTag("beach"),
-                "SexCom" to Feed.SexSearch(""), "EroMe|@Some.One" to Feed.EromeUser("Some.One"), "FourChan" to Feed.ChanThreads("")),
+                "EroMe|@Some.One" to Feed.EromeUser("Some.One"), "FourChan" to Feed.ChanThreads("")),
             page(1).map { it.key to it.feed })
         assertEquals(listOf("FikFap|night", "FikFap|dance"), page(2).filter { it.feed.source == OnlineSource.FikFap }.map { it.key })
         assertEquals(listOf("FikFap|beach", "FikFap|night"), page(3).filter { it.feed.source == OnlineSource.FikFap }.map { it.key })

@@ -1,0 +1,49 @@
+# Runs the app's code for 4chan, EroMe, sex.com, FikFap and Reddit against the real sites, from
+# GitHub's runner. Started by hand, or by a push that changes the site code or this test.
+# It prints counts, never titles, names or addresses.
+# A site that refuses the runner or shows a bot check is reported as blocked; nothing gets around it.
+name: Live sites
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [online-sources]
+    paths:
+      - '.github/workflows/live-sites.yml'
+      - 'app/src/test/java/app/redgrab/LiveSitesTest.kt'
+      - 'app/src/main/java/app/redgrab/Sources.kt'
+      - 'app/src/main/java/app/redgrab/MoreSources.kt'
+
+permissions:
+  contents: read
+
+jobs:
+  sites:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ github.sha }}
+          restore-keys: gradle-${{ runner.os }}-
+      - name: Run the site code against the sites
+        env:
+          REDGRAB_LIVE_SITES: '1'
+          REDDIT_CLIENT_ID: ${{ vars.REDDIT_CLIENT_ID }}
+        run: |
+          echo "sdk.dir=$ANDROID_HOME" > local.properties
+          set +e
+          ./gradlew --no-daemon --build-cache :app:testDebugUnitTest --tests '*LiveSitesTest*' -i > live.log 2>&1
+          code=$?
+          grep -E "LIVE  |AssertionError|check\(s\) failed|FAILED|BUILD" live.log | sed 's/^ *//'
+          exit $code

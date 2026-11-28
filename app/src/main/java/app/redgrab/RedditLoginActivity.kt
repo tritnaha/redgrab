@@ -116,12 +116,20 @@ class RedditLoginActivity : ComponentActivity() {
         w.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(view: WebView, req: WebResourceRequest): Boolean {
                 if (isRedirect(req.url)) { onRedirect(req.url); return true }
-                // Only web pages load here; other link types (app links, intents) are ignored.
-                return req.url.scheme != "https"
+                // Only Reddit's own pages load here; other sites and other link types (app links, intents) are not followed.
+                val host = req.url.host?.lowercase().orEmpty()
+                val reddit = req.url.scheme == "https" && (host == "reddit.com" || host.endsWith(".reddit.com"))
+                if (req.isForMainFrame && !reddit) message = "Only Reddit's pages open here."
+                return req.isForMainFrame && !reddit
             }
 
             override fun onPageStarted(view: WebView, url: String?, favicon: android.graphics.Bitmap?) {
                 pageHost = runCatching { android.net.Uri.parse(url).host }.getOrNull().orEmpty()
+                // A form can lead elsewhere without being asked about above: such a page is stopped.
+                val h = pageHost.lowercase()
+                if (url != null && url.startsWith("http") && !(url.startsWith("https://") && (h == "reddit.com" || h.endsWith(".reddit.com")))) {
+                    view.stopLoading(); if (view.canGoBack()) view.goBack(); message = "Only Reddit's pages open here."
+                }
             }
 
             override fun doUpdateVisitedHistory(view: WebView, url: String?, isReload: Boolean) = onNav(view.canGoBack())

@@ -77,7 +77,10 @@ class LiveRedGifsTest {
         for (order in OnlineOrder.entries) check("Search \"dance\", ${order.label}", api.searchClips("dance", order, 1, extras))
 
         // A creator's clips and the "related" list, starting from a clip of the home feed.
-        val first = home.clips.first { it.user.isNotEmpty() }
+        // A creator of the home feed whose page exists (an account can be gone while its clips are still listed).
+        val first = home.clips.filter { it.user.isNotEmpty() }.first { c ->
+            try { api.performerClips(c.user, OnlineOrder.New, 1, extras); true } catch (e: HttpException) { if (e.code == 404) false else throw e }
+        }
         check("Creator feed (newest)", api.performerClips(first.user, OnlineOrder.New, 1, extras))
         check("Creator feed (top)", api.performerClips(first.user, OnlineOrder.TopAll, 1, extras))
         check("Related", api.relatedClips(first.id, 1, extras))

@@ -353,6 +353,7 @@ private fun saveResult(vm: MainViewModel, clip: Clip, out: File, p: EditParams, 
     val lib = vm.library
     val ctx = vm.getApplication<android.app.Application>()
     val folder = lib.folder() ?: error("Save folder not available")
+    if (lib.prefs.storageJob != null) error("Clips are being moved. Try again when that is done.")
     try {
         if (overwrite) {
             // Write the new version next to the old one first, then swap: a failure midway

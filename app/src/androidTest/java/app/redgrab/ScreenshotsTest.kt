@@ -398,6 +398,10 @@ class ScreenshotsTest {
             check(!File(old, "a-hd.mp4").exists() && !File(old, "imported/c.gif").exists()) { "originals were left behind" }
             check(File(store, "elsewhere/not-ours.mp4").length() == 700L && !File(store, "not-ours.mp4").exists()) { "the move reached outside the folder it was given" }
             check(store.walkTopDown().none { it.name.endsWith(".moving") }) { "a half-made copy was left" }
+            // A file in "imported" is listed once, however often the folder is read, and its record leads back to the file.
+            lib.adoptImported(); lib.adoptImported()
+            val listed = lib.state.value.clips.filter { it.imported }
+            check(listed.size == 1 && listed[0].copyFile == "imported/c.gif" && lib.localFile(listed[0]) != null) { "imported files listed: ${listed.map { it.id to it.copyFile }}" }
             // Not everything could be moved, so the old folder is not tidied away.
             check(!kotlinx.coroutines.runBlocking { lib.tidyMovedFolder(oldFolder) } && File(old, ".nomedia").exists())
             File(old, "b-sd.mp4").delete()
@@ -416,6 +420,21 @@ class ScreenshotsTest {
             check(File(store, "a-hd.mp4").exists()) { "export removed the app's copy" }
             // A second export copies nothing again.
             check(kotlinx.coroutines.runBlocking { lib.exportTo(outTree) { } } == (0 to 0))
+
+            // The same move as background work, the way the app runs it: it finishes by itself and the app then uses its own storage.
+            File(store, "out").deleteRecursively()
+            val later = File(store, "later").apply { mkdirs() }
+            File(later, "d-hd.mp4").writeBytes(ByteArray(3000) { 4 }); File(later, "e-hd.mp4").writeBytes(ByteArray(1200) { 6 })
+            val laterFolder = android.provider.DocumentsContract.buildDocumentUriUsingTree(PrivateDocs.TREE, "clips/later")
+            lib.prefs.folderUri = laterFolder
+            StorageJob.finished.value = null
+            StorageJob.start(app, StorageJob.IN, laterFolder)
+            val until = System.currentTimeMillis() + 90_000
+            while (lib.prefs.storageJob != null && System.currentTimeMillis() < until) Thread.sleep(500)
+            check(lib.prefs.storageJob == null) { "the background move didn't finish (status: ${StorageJob.status.value})" }
+            check(File(store, "d-hd.mp4").length() == 3000L && File(store, "e-hd.mp4").length() == 1200L && !File(later, "d-hd.mp4").exists()) { "the background move left files behind: ${StorageJob.finished.value}" }
+            check(lib.prefs.folderUri == PrivateDocs.TREE) { "the app didn't switch to its own storage: ${StorageJob.finished.value}" }
+            StorageJob.finished.value = null
         } finally {
             PrivateDocs.dir(app).deleteRecursively()
             lib.prefs.folderUri = before; lib.prefs.folderLabel = label

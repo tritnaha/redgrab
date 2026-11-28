@@ -11,7 +11,8 @@ fun Library.markSaved(id: String, q: Quality) = synchronized(lock) {
         store.deleteFailures(listOf(id))
     }
     _state.update { s ->
-        s.copy(qualities = s.qualities + (id to ((s.qualities[id] ?: emptySet()) + q)), failures = s.failures - id)
+        s.copy(qualities = s.qualities + (id to ((s.qualities[id] ?: emptySet()) + q)), failures = s.failures - id,
+            savedAt = s.savedAt + (id to System.currentTimeMillis()))
     }
 }
 
@@ -35,6 +36,13 @@ fun Library.forgetHistory() {
     val scan = scanFolder()
     synchronized(lock) { store.clearSaved(); _state.update { it.copy(qualities = scan) } }
     AppLog.i("Download history cleared")
+}
+
+/** When each clip was last saved, from the download history. */
+internal fun Library.readSavedAt(): Map<String, Long> {
+    val out = HashMap<String, Long>()
+    store.saved().forEach { r -> if (r.at > (out[r.id] ?: 0L)) out[r.id] = r.at }
+    return out
 }
 
 internal fun Library.readHistory(): Map<String, Set<Quality>> {

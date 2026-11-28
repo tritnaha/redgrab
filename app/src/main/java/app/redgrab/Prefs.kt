@@ -122,6 +122,8 @@ class Prefs(context: Context) : RedditStore {
     var wall: Boolean by bool("wall", false)
     /** Previews per row (2..6). */
     var columns: Int by int("columns", 3, within = 2..6)
+    /** The order of the Saved grid ([Sort] name); null = last saved first. */
+    var sort: String? by text("sort")
     /** Selected design theme ID. */
     var theme: String? by text("theme")
     /** Where the page indicator was dragged to, in pixels from its usual place (bottom right). */
@@ -156,6 +158,9 @@ class Prefs(context: Context) : RedditStore {
         if (q.isEmpty()) return
         sp.edit { putString("recent.$source", (listOf(q) + recent(source).filter { !it.equals(q, ignoreCase = true) }).take(12).joinToString("\n")) }
     }
+
+    /** A move or export that hasn't finished: "kind\nfolder\nlabel" (see StorageJob); null = none. */
+    var storageJob: String? by text("storageJob")
 
     /** Where and when plain copies were last exported to ("Movies/backup · 2026-11-28"); null = never. */
     var lastExport: String? by text("lastExport")
@@ -213,7 +218,7 @@ class Prefs(context: Context) : RedditStore {
     /** Ask for the phone's own unlock (fingerprint, face, PIN, pattern, password) before showing the app. */
     var appLock: Boolean by bool("appLock", false)
     /** Lock again after the app has been out of sight this many seconds; 0 = straight away. */
-    var appLockAfterSec: Int by int("appLockAfterSec", 60, within = 0..3600)
+    var appLockAfterSec: Int by int("appLockAfterSec", 0, within = 0..3600)
 
     private companion object {
         /** What must never be stored readable: anything that lets someone act as you on a site. */

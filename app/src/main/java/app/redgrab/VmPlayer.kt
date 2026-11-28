@@ -204,7 +204,8 @@ internal fun MainViewModel.saveOnlineFile(clip: Clip, category: String) {
             var shown = -1
             library.addOnlineFile(clip.copy(tags = tags), http, if (sexCom) SexComApi.files(clip) else listOfNotNull(clip.hd)) { done, total ->
                 // Whole percents only, so the screen isn't redrawn for every chunk.
-                val pct = if (total > 0) (done * 100 / total).toInt().coerceIn(0, 100) else -1
+                // Once every byte is here the file is still checked and listed: no "100%" that then seems to hang.
+                val pct = if (total > 0 && done < total) (done * 100 / total).toInt().coerceIn(0, 99) else -1
                 if (pct != shown) { shown = pct; savingFraction = savingFraction + (clip.id to if (pct < 0) -1f else pct / 100f) }
             }
             if (category.isNotEmpty()) library.setCategory(clip.id, category)

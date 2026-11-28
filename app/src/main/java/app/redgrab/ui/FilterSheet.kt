@@ -59,7 +59,7 @@ fun FilterSheet(vm: MainViewModel, s: LibraryState, onClose: () -> Unit) {
 
             Label("Sort by")
             FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                Sort.entries.forEach { o -> FilterChip(a.sort == o, { set(a.copy(sort = o)) }, { Text(o.label) }) }
+                Sort.entries.forEach { o -> FilterChip(a.sort == o, { vm.changeSort(o) }, { Text(o.label) }) }
             }
 
             Label("Length")

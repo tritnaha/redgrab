@@ -175,8 +175,10 @@ class DownloadWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(c
     }
 
     private suspend fun run(): Result = withContext(Dispatchers.IO) {
-        active = true // also covers a run Android restarted after the app was killed
         val prefs = lib.prefs
+        // Clips are being moved in or out: this run waits (Android tries again shortly) rather than write where files are being taken from.
+        if (prefs.storageJob != null) { AppLog.i("Download waits for the move to finish"); return@withContext Result.retry() }
+        active = true // also covers a run Android restarted after the app was killed
         val folder = lib.folder()
         val token = prefs.token
         val ua = applicationContext.userAgent

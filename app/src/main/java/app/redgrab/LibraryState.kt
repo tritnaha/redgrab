@@ -80,6 +80,8 @@ data class LibraryState(
     val clips: List<Clip> = emptyList(),
     /** Saved qualities per clip ID (from the folder plus download history). */
     val qualities: Map<String, Set<Quality>> = emptyMap(),
+    /** When each clip was last saved to the phone (epoch millis), for "Last saved" order. */
+    val savedAt: Map<String, Long> = emptyMap(),
     /** Downloads that failed, by clip ID, with the reason. Kept across restarts. */
     val failures: Map<String, Failure> = emptyMap(),
     val refreshing: Boolean = false,

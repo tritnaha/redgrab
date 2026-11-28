@@ -42,6 +42,8 @@ class RedGrabApp : Application(), SingletonImageLoader.Factory {
         AppLock.install(this, library.prefs)
         runCatching { SyncWorker.schedule(this) }
         runCatching { UpdateWorker.schedule(this) }
+        // A move or export that was cut short carries on.
+        runCatching { StorageJob.resume(this) }
         // Remove leftover WhatsApp share copies from earlier sessions.
         Thread { runCatching { WhatsAppShare.cleanUp(this) } }.start()
         getSystemService(NotificationManager::class.java).apply {
