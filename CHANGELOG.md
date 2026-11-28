@@ -6,6 +6,13 @@ time it opens after an update, and the whole list under Settings → About → W
 Each version has the sections it needs out of Added, Changed and Fixed, one line per change,
 and a link to the code that made it.
 
+## 13.18 (build 31) · 2026-11-28
+
+### Fixed
+- Clips saved from sex.com, EroMe and 4chan since 13.14 showed "The file is missing from the save folder". The files were saved; they are found again.
+- The same fault listed imported files again at every start. The double entries are removed when the app opens.
+- Saving a picture no longer sits at 100% while the file is checked.
+
 ## 13.17 (build 30) · 2026-11-28
 
 ### Added
@@ -15,6 +22,8 @@ and a link to the code that made it.
 
 ### Fixed
 - Clips saved from the Online tab were listed last, after everything from your likes.
+
+[Details](https://github.com/tritnaha/redgrab/commit/9e39fed)
 
 ## 13.16 (build 29) · 2026-11-28
 

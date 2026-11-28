@@ -398,6 +398,10 @@ class ScreenshotsTest {
             check(!File(old, "a-hd.mp4").exists() && !File(old, "imported/c.gif").exists()) { "originals were left behind" }
             check(File(store, "elsewhere/not-ours.mp4").length() == 700L && !File(store, "not-ours.mp4").exists()) { "the move reached outside the folder it was given" }
             check(store.walkTopDown().none { it.name.endsWith(".moving") }) { "a half-made copy was left" }
+            // A file in "imported" is listed once, however often the folder is read, and its record leads back to the file.
+            lib.adoptImported(); lib.adoptImported()
+            val listed = lib.state.value.clips.filter { it.imported }
+            check(listed.size == 1 && listed[0].copyFile == "imported/c.gif" && lib.localFile(listed[0]) != null) { "imported files listed: ${listed.map { it.id to it.copyFile }}" }
             // Not everything could be moved, so the old folder is not tidied away.
             check(!kotlinx.coroutines.runBlocking { lib.tidyMovedFolder(oldFolder) } && File(old, ".nomedia").exists())
             File(old, "b-sd.mp4").delete()

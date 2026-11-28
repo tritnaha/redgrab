@@ -160,7 +160,7 @@ fun Library.importFolder(source: Uri, progress: (String) -> Unit): Pair<Int, Int
         }.onFailure { AppLog.w("Could not import ${doc.name}: ${it.message}") }.getOrDefault(false)
         if (ok) moved++ else failed++
     }
-    AppLog.i("Import: moved $moved file(s) into $Library.IMPORT_DIR" + if (failed > 0) ", $failed failed" else "")
+    AppLog.i("Import: moved $moved file(s) into ${Library.IMPORT_DIR}" + if (failed > 0) ", $failed failed" else "")
     adoptImported(progress)
     return moved to failed
 }
@@ -176,7 +176,7 @@ internal fun Library.adoptNewFiles(progress: (String) -> Unit): Int {
     val tree = prefs.folderUri ?: return 0
     val known = synchronized(lock) { imports.mapNotNullTo(HashSet()) { it.copyFile } }
     val fresh = children(tree, DocumentsContract.getDocumentId(dir.uri))
-        .filter { !it.isDir && "$Library.IMPORT_DIR/${it.name}" !in known }
+        .filter { !it.isDir && "${Library.IMPORT_DIR}/${it.name}" !in known }
         .filter { it.name.substringAfterLast('.', "").lowercase() in Clip.IMAGE_EXT + Clip.VIDEO_EXT }
         .sortedBy { it.name.lowercase() }
     if (fresh.isEmpty()) return 0
@@ -189,7 +189,7 @@ internal fun Library.adoptNewFiles(progress: (String) -> Unit): Int {
             var id = "imp-$stem"
             var n = 2
             while (!taken.add(id)) id = "imp-$stem-${n++}"
-            val file = "$Library.IMPORT_DIR/${d.name}"
+            val file = "${Library.IMPORT_DIR}/${d.name}"
             val isImage = d.name.substringAfterLast('.', "").lowercase() in Clip.IMAGE_EXT
             var w = 0; var h = 0; var dur = 0.0; var audio = false
             if (isImage) makeImageThumb(id, d.uri)?.let { w = it.first; h = it.second }
@@ -280,7 +280,7 @@ fun Library.addOnlineFile(c: Clip, http: okhttp3.OkHttpClient, urls: List<String
                 val finalName = DocumentFile.fromSingleUri(ctx, done)?.name ?: name
                 val clip = c.copy(sd = null, width = size.first, height = size.second, hasAudio = audio, duration = duration,
                     created = c.created.takeIf { it > 0 } ?: (System.currentTimeMillis() / 1000),
-                    sources = c.sources.ifEmpty { setOf(OnlineSource.of(c.id).label) }, copyFile = "$Library.IMPORT_DIR/$finalName")
+                    sources = c.sources.ifEmpty { setOf(OnlineSource.of(c.id).label) }, copyFile = "${Library.IMPORT_DIR}/$finalName")
                 synchronized(lock) {
                     imports = imports + clip
                     store.putClips(listOf(ClipRow.of(clip, ClipRow.IMPORTED, (store.clips(ClipRow.IMPORTED).lastOrNull()?.pos ?: -1) + 1)))
@@ -288,7 +288,7 @@ fun Library.addOnlineFile(c: Clip, http: okhttp3.OkHttpClient, urls: List<String
                     _state.update { it.copy(clips = all) }
                 }
             }
-            AppLog.i("Saved ${c.id} as $Library.IMPORT_DIR/$name (${c.tags.size} tag(s))")
+            AppLog.i("Saved ${c.id} as ${Library.IMPORT_DIR}/$name (${c.tags.size} tag(s))")
             return
         } catch (e: Exception) {
             failure = e

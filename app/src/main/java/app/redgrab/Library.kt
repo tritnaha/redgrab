@@ -43,7 +43,16 @@ class Library(internal val ctx: Context) {
         try {
             raw = store.clips(ClipRow.LIBRARY).map { it.toClip() }
             extras = store.clips(ClipRow.EXTRA).map { it.toClip() }
-            imports = store.clips(ClipRow.IMPORTED).map { it.toClip() }
+            imports = store.clips(ClipRow.IMPORTED).let { rows ->
+                val (kept, gone) = repairImports(rows)
+                if (kept != rows) {
+                    gone.chunked(500).forEach(store::deleteClips)
+                    store.putClips(kept.filter { it !in rows })
+                    gone.forEach { thumbFile(it).delete(); previewFile(it).delete() }
+                    AppLog.w("Saved files: ${kept.count { it !in rows }} record(s) put right, ${gone.size} double entr${if (gone.size == 1) "y" else "ies"} removed")
+                }
+                kept
+            }.map { it.toClip() }
             extras.forEach { if (OnlineSource.of(it.id) == OnlineSource.FikFap) SourceHeaders.learnFikFap(it.hd) }
             overrides = store.overrides().associate { it.id to it.toOverride() }
             copies = store.copies().map { it.toCopy() }
@@ -125,6 +134,25 @@ class Library(internal val ctx: Context) {
         internal val UNSAFE_NAME = Regex("[^A-Za-z0-9_-]")
         /** Subfolder of the save folder that holds imported files. */
         const val IMPORT_DIR = "imported"
+        /**
+         * 13.14 to 13.17 recorded the place of imported and online-saved files with a broken prefix
+         * ("…Library$Companion@1a2b.IMPORT_DIR/x.gif"), so the files were there but not found. The right
+         * place for such a record, or null when the record is fine.
+         */
+        fun repairedImportPath(file: String?): String? =
+            file?.takeIf { !it.startsWith("$IMPORT_DIR/") && ".IMPORT_DIR/" in it }?.let { "$IMPORT_DIR/" + it.substringAfterLast(".IMPORT_DIR/") }
+
+        /**
+         * Puts those records right. The same fault listed every file again at each start, so of several
+         * entries for one file one is kept: the clip as saved from its site, else the first.
+         * Returns the entries to keep (in order) and the IDs to remove.
+         */
+        fun repairImports(rows: List<ClipRow>): Pair<List<ClipRow>, List<String>> {
+            val fixed = rows.map { r -> repairedImportPath(r.file)?.let { r.copy(file = it) } ?: r }
+            val keep = fixed.filter { it.file != null }.groupBy { it.file }.mapValues { (_, same) -> (same.firstOrNull { !it.id.startsWith("imp-") } ?: same.first()).id }
+            val gone = fixed.filter { it.file != null && keep[it.file] != it.id }.map { it.id }
+            return fixed.filter { it.id !in gone.toSet() } to gone
+        }
         internal val LEGACY_FILES = listOf("library.json", "extras.json", "overrides.json", "copies.json", "hidden.txt",
             "downloaded.txt", "queue.txt", "sync_history.json", "collections.json", "watched.txt", "files.json",
             "failures.json", "niches.json", "performers.json")
