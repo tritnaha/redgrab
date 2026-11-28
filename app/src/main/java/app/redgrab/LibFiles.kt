@@ -1,5 +1,6 @@
 package app.redgrab
 
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.Dispatchers
 import android.net.Uri
@@ -94,18 +95,31 @@ internal fun Library.importedDir(create: Boolean): DocumentFile? {
     return root.findFile(Library.IMPORT_DIR)?.takeIf { it.isDirectory } ?: if (create) root.createDirectory(Library.IMPORT_DIR) else null
 }
 
-internal fun Library.children(tree: Uri, parentDocId: String): List<Library.Doc> {
+internal fun Library.children(tree: Uri, parentDocId: String, strict: Boolean = false): List<Library.Doc> {
     val out = ArrayList<Library.Doc>()
     val cols = arrayOf(DocumentsContract.Document.COLUMN_DOCUMENT_ID, DocumentsContract.Document.COLUMN_DISPLAY_NAME,
         DocumentsContract.Document.COLUMN_LAST_MODIFIED, DocumentsContract.Document.COLUMN_MIME_TYPE)
-    ctx.contentResolver.query(DocumentsContract.buildChildDocumentsUriUsingTree(tree, parentDocId), cols, null, null, null)?.use { c ->
+    val cursor = ctx.contentResolver.query(DocumentsContract.buildChildDocumentsUriUsingTree(tree, parentDocId), cols, null, null, null)
+    // No answer is not "empty": a move or export must not take a folder it couldn't read for one with nothing in it.
+    if (cursor == null && strict) throw java.io.IOException("The folder couldn't be read")
+    cursor?.use { c ->
         while (c.moveToNext()) {
             val name = c.getString(1) ?: continue
+            // A name is one path element; anything else is not taken along.
+            if (strict && (name.isEmpty() || name == "." || name == ".." || '/' in name || '\\' in name || '\u0000' in name)) continue
             out += Library.Doc(DocumentsContract.buildDocumentUriUsingTree(tree, c.getString(0)), name, c.getLong(2),
                 c.getString(3) == DocumentsContract.Document.MIME_TYPE_DIR)
         }
     }
     return out
+}
+
+/**
+ * The document a folder address stands for. A folder made with "New subfolder" is addressed as a
+ * document inside the folder that was picked; taking the picked folder for it would reach far too much.
+ */
+internal fun folderDocId(uri: Uri): String = uri.pathSegments.let { p ->
+    if (p.size >= 4 && p[0] == "tree" && p[2] == "document") p[3] else DocumentsContract.getTreeDocumentId(uri)
 }
 
 /**
@@ -139,7 +153,7 @@ fun Library.importFolder(source: Uri, progress: (String) -> Unit): Pair<Int, Int
             runCatching { DocumentsContract.moveDocument(resolver, doc.uri, parent, dest.uri) }.getOrNull() != null || run {
                 val mime = if (doc.name.endsWith(".gif", true)) "image/gif" else "application/octet-stream"
                 val copy = dest.createFile(mime, doc.name) ?: error("Could not create ${doc.name}")
-                resolver.openInputStream(doc.uri)!!.use { input -> resolver.openOutputStream(copy.uri)!!.use { input.copyTo(it) } }
+                resolver.openInputStream(doc.uri)!!.use { input -> resolver.openOutputStream(copy.uri, "wt")!!.use { input.copyTo(it) } }
                 DocumentsContract.deleteDocument(resolver, doc.uri)
                 true
             }
@@ -357,23 +371,34 @@ internal fun Library.savePerformers(m: Map<String, Performer>) {
     if (m.isNotEmpty()) store.putPerformers(m.values.map(PerformerRow::of))
 }
 
-/** What is in a folder tree, sub-folders included: (document, path below the folder). Used to move a whole save folder. */
-internal fun Library.walk(tree: Uri): List<Pair<Library.Doc, String>> {
+/** What is in a folder, sub-folders included: (document, path below the folder). Fails rather than skip a folder it can't read. */
+internal fun Library.walk(tree: Uri, skipDocId: String? = null): List<Pair<Library.Doc, String>> {
     val out = ArrayList<Pair<Library.Doc, String>>()
-    val todo = ArrayDeque(listOf(DocumentsContract.getTreeDocumentId(tree) to ""))
+    val todo = ArrayDeque(listOf(folderDocId(tree) to ""))
     while (todo.isNotEmpty()) {
         val (id, path) = todo.removeFirst()
-        for (d in children(tree, id)) {
-            if (d.isDir) todo += DocumentsContract.getDocumentId(d.uri) to "$path${d.name}/" else out += d to path + d.name
+        for (d in children(tree, id, strict = true)) {
+            val docId = DocumentsContract.getDocumentId(d.uri)
+            if (docId == skipDocId) continue // an export folder inside the folder being walked
+            if (d.isDir) todo += docId to "$path${d.name}/" else out += d to path + d.name
         }
     }
     return out
 }
 
+private fun sha256(input: java.io.InputStream, also: java.io.OutputStream? = null): String {
+    val md = java.security.MessageDigest.getInstance("SHA-256")
+    val buf = ByteArray(256 * 1024)
+    while (true) { val n = input.read(buf); if (n < 0) break; md.update(buf, 0, n); also?.write(buf, 0, n) }
+    return md.digest().joinToString("") { "%02x".format(it) }
+}
+
 /**
- * Moves everything in the save folder into the app's own storage, in one go. Each file is copied,
- * the copy's size checked, and only then the original deleted; a file that is already inside with
- * the same size is not copied again, so an interrupted move simply continues when started again.
+ * Moves everything in the save folder into the app's own storage, in one go. Each file is copied
+ * and written through to storage, the copy is read back and compared with the original byte for
+ * byte (by checksum), and only then is the original deleted. A file that is already inside with
+ * the same content is not copied again, so an interrupted move carries on when started again; one
+ * with the same name and other content is left where it is and counted as not moved.
  * Returns (moved, failed).
  */
 suspend fun Library.moveIntoApp(onProgress: (String) -> Unit): Pair<Int, Int> {
@@ -386,61 +411,106 @@ suspend fun Library.moveIntoApp(onProgress: (String) -> Unit): Pair<Int, Int> {
 internal suspend fun Library.moveTreeIntoApp(from: Uri, onProgress: (String) -> Unit): Pair<Int, Int> = withContext(Dispatchers.IO) {
     val resolver = ctx.contentResolver
     val dest = PrivateDocs.dir(ctx)
+    val root = dest.canonicalPath + java.io.File.separator
+    // Half-written copies of an earlier, interrupted run.
+    dest.walkTopDown().filter { it.isFile && it.name.endsWith(".moving") }.toList().forEach { it.delete() }
     val files = walk(from).filter { (d, _) -> d.name != ".nomedia" }
     var moved = 0; var failed = 0
     files.forEachIndexed { i, (doc, path) ->
         onProgress("%,d of %,d".format(i + 1, files.size))
-        runCatching {
-            val target = java.io.File(dest, path).also { it.parentFile?.mkdirs() }
-            if (!target.canonicalPath.startsWith(dest.canonicalPath + java.io.File.separator)) error("bad name")
-            val size = DocumentFile.fromSingleUri(ctx, doc.uri)?.length() ?: -1
-            if (!(target.exists() && target.length() == size)) {
-                val tmp = java.io.File(target.path + ".moving")
-                resolver.openInputStream(doc.uri)!!.use { input -> tmp.outputStream().use { input.copyTo(it, 256 * 1024) } }
-                if (size >= 0 && tmp.length() != size) { tmp.delete(); error("copy is ${tmp.length()} bytes, original $size") }
-                if (!tmp.renameTo(target)) { tmp.delete(); error("could not put the copy in place") }
-                target.setLastModified(doc.modified)
+        kotlinx.coroutines.currentCoroutineContext().ensureActive()
+        var tmp: java.io.File? = null
+        try {
+            val target = java.io.File(dest, path)
+            // Checked before anything is created: nothing is ever made outside the private folder.
+            if (!target.canonicalPath.startsWith(root)) error("the name leads outside the folder")
+            target.parentFile?.mkdirs()
+            if (target.exists()) {
+                // Already inside (an earlier run)? Only if it is the same content; otherwise both are kept.
+                val same = resolver.openInputStream(doc.uri)!!.use { sha256(it) } == target.inputStream().use { sha256(it) }
+                if (!same) error("another file with this name is already inside; left in the folder")
+            } else {
+                val part = java.io.File(target.path + ".moving").also { tmp = it }
+                val sum = resolver.openInputStream(doc.uri)!!.use { input ->
+                    java.io.FileOutputStream(part).use { out -> sha256(input, out).also { out.flush(); out.fd.sync() } }
+                }
+                if (part.inputStream().use { sha256(it) } != sum) error("the copy doesn't match the original")
+                if (!part.renameTo(target)) error("could not put the copy in place")
+                tmp = null
+                if (doc.modified > 0) target.setLastModified(doc.modified)
             }
-            // The original goes only once the copy is in place.
+            // The original goes only once a verified copy is in place.
             DocumentsContract.deleteDocument(resolver, doc.uri)
             moved++
-        }.onFailure { failed++; AppLog.w("Not moved into the app: ${doc.name}: ${it.message}") }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            tmp?.delete(); throw e
+        } catch (e: Exception) {
+            tmp?.delete(); failed++
+            AppLog.w("Not moved into the app: ${doc.name}: ${e.message}")
+        }
     }
-    // The folder's own leftovers (the Gallery marker, an empty "imported").
-    if (failed == 0) runCatching { DocumentFile.fromTreeUri(ctx, from)?.listFiles()?.forEach { if (it.name == ".nomedia" || (it.isDirectory && it.listFiles().isEmpty())) it.delete() } }
     AppLog.i("Moved into the app: $moved file(s), $failed failed")
     moved to failed
 }
 
+/** After a complete move: true when a fresh look at [from] finds no file left. Then its Gallery marker and empty sub-folders are removed. */
+internal suspend fun Library.tidyMovedFolder(from: Uri): Boolean = withContext(Dispatchers.IO) {
+    runCatching {
+        if (walk(from).any { (d, _) -> d.name != ".nomedia" }) return@runCatching false
+        val resolver = ctx.contentResolver
+        for (d in children(from, folderDocId(from), strict = true)) {
+            // A sub-folder goes only when listing it worked and showed nothing but the marker.
+            if (d.isDir && children(from, DocumentsContract.getDocumentId(d.uri), strict = true).all { it.name == ".nomedia" }) runCatching { DocumentsContract.deleteDocument(resolver, d.uri) }
+            else if (!d.isDir && d.name == ".nomedia") runCatching { DocumentsContract.deleteDocument(resolver, d.uri) }
+        }
+        true
+    }.getOrDefault(false)
+}
+
 /**
  * Copies every finished file of the save folder into [to] as ordinary files (sub-folders kept), for
- * a backup or to take them elsewhere. Nothing is removed from the app. Returns (copied, failed).
+ * a backup or to take them elsewhere. Nothing is removed from the app. A ".nomedia" marker is put
+ * in [to] first, so galleries don't pick the copies up. A file already there under the same name is
+ * replaced only once the new copy is complete. Returns (copied, failed).
  */
 suspend fun Library.exportTo(to: Uri, onProgress: (String) -> Unit): Pair<Int, Int> = withContext(Dispatchers.IO) {
     val from = prefs.folderUri ?: return@withContext 0 to 0
     val resolver = ctx.contentResolver
     val root = DocumentFile.fromTreeUri(ctx, to) ?: error("Can't write to that folder")
-    val files = walk(from).filter { (d, _) -> !d.name.endsWith(".part") && !d.name.endsWith(".new") && !d.name.endsWith(".moving") && d.name != ".nomedia" }
+    val toId = runCatching { DocumentsContract.getDocumentId(root.uri) }.getOrNull()
+    if (from.authority == to.authority && toId == folderDocId(from)) error("That is the save folder itself")
+    val files = walk(from, skipDocId = toId.takeIf { from.authority == to.authority })
+        .filter { (d, _) -> !d.name.endsWith(".part") && !d.name.endsWith(".new") && !d.name.endsWith(".moving") && !d.name.endsWith(".exporting") && d.name != ".nomedia" }
+    if (root.findFile(".nomedia") == null) root.createFile("application/octet-stream", ".nomedia")
     var copied = 0; var failed = 0
     val dirs = HashMap<String, DocumentFile>()
     files.forEachIndexed { i, (doc, path) ->
         onProgress("%,d of %,d".format(i + 1, files.size))
-        runCatching {
+        kotlinx.coroutines.currentCoroutineContext().ensureActive()
+        var tmp: DocumentFile? = null
+        try {
             val sub = path.substringBeforeLast('/', "")
             val dir = if (sub.isEmpty()) root else dirs.getOrPut(sub) {
                 sub.split('/').fold(root) { d, name -> d.findFile(name)?.takeIf { it.isDirectory } ?: d.createDirectory(name) ?: error("Could not create $name") }
             }
-            val size = DocumentFile.fromSingleUri(ctx, doc.uri)?.length() ?: -1
             val there = dir.findFile(doc.name)
-            if (there != null && there.length() == size) return@runCatching // already exported
-            there?.delete()
-            val mime = android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(doc.name.substringAfterLast('.', "").lowercase()) ?: "application/octet-stream"
-            val out = dir.createFile(mime, doc.name) ?: error("Could not create ${doc.name}")
+            if (there != null && there.isDirectory) error("a folder with this name is in the way")
+            val sum = resolver.openInputStream(doc.uri)!!.use { sha256(it) }
+            if (there != null && resolver.openInputStream(there.uri)!!.use { sha256(it) } == sum) return@forEachIndexed // already exported
+            val out = (dir.createFile("application/octet-stream", doc.name + ".exporting") ?: error("Could not create ${doc.name}")).also { tmp = it }
             resolver.openInputStream(doc.uri)!!.use { input -> resolver.openOutputStream(out.uri, "wt")!!.use { input.copyTo(it, 256 * 1024) } }
+            if (resolver.openInputStream(out.uri)!!.use { sha256(it) } != sum) error("the copy doesn't match")
+            there?.delete()
+            if (!out.renameTo(doc.name)) error("could not name the copy")
+            tmp = null
             copied++
-        }.onFailure { failed++; AppLog.w("Not exported: ${doc.name}: ${it.message}") }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            runCatching { tmp?.delete() }; throw e
+        } catch (e: Exception) {
+            runCatching { tmp?.delete() }; failed++
+            AppLog.w("Not exported: ${doc.name}: ${e.message}")
+        }
     }
     AppLog.i("Exported $copied file(s), $failed failed")
     copied to failed
 }
-

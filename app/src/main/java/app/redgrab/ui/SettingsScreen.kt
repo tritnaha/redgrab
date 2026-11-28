@@ -98,6 +98,7 @@ fun SettingsScreen(vm: MainViewModel, onSignIn: () -> Unit, onOpenLog: () -> Uni
         if (uri != null) vm.setFolder(uri)
     }
     val pickExport = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri -> if (uri != null) vm.exportAll(uri) }
+    val pickBringIn = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri -> if (uri != null) vm.moveIntoApp(uri) }
     val pickImport = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         if (uri != null) vm.importFolder(uri)
     }
@@ -159,17 +160,29 @@ fun SettingsScreen(vm: MainViewModel, onSignIn: () -> Unit, onOpenLog: () -> Uni
                     confirmButton = { TextButton(onClick = { confirmMove = false; vm.moveIntoApp() }) { Text("Move all") } },
                     dismissButton = { TextButton(onClick = { confirmMove = false }) { Text("Cancel") } },
                 )
+                var confirmExport by remember { mutableStateOf(false) }
+                if (confirmExport) AlertDialog(
+                    onDismissRequest = { confirmExport = false },
+                    title = { Text("Export all clips?") },
+                    text = { Text("Plain copies are written to the folder you pick. File browsers and other apps can open them there. The clips in RedGrab stay.") },
+                    confirmButton = { TextButton(onClick = { confirmExport = false; pickExport.launch(null) }) { Text("Pick folder") } },
+                    dismissButton = { TextButton(onClick = { confirmExport = false }) { Text("Cancel") } },
+                )
                 if (vm.privateStorage) {
-                    Row_(Icons.Default.Lock, "Inside the app", vm.storageStatus ?: "Only RedGrab can see your clips. Export copies them out as plain files.")
-                    Row(Modifier.padding(start = 16.dp, end = 16.dp, bottom = 12.dp)) {
-                        OutlinedButton(onClick = { pickExport.launch(null) }, enabled = vm.storageStatus == null) { Text("Export all") }
+                    Row_(Icons.Default.Lock, "Inside the app", vm.storageStatus
+                        ?: ("Only RedGrab can see your clips. Uninstalling, clearing storage or a new phone removes them: export first." +
+                            (vm.lastExport?.let { "\nPlain copies exported: $it" } ?: "")))
+                    Row(Modifier.padding(start = 16.dp, end = 16.dp, bottom = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(onClick = { confirmExport = true }, enabled = vm.storageStatus == null) { Text("Export all") }
+                        // A folder of RedGrab clips from before (an earlier install, another phone) is taken in as it is.
+                        OutlinedButton(onClick = { pickBringIn.launch(null) }, enabled = vm.storageStatus == null) { Text("Bring in a folder") }
                     }
                 } else {
                 Row_(Icons.Default.Folder, vm.folderLabel ?: "No folder chosen",
                     vm.storageStatus ?: "Other apps and file browsers can see this folder.")
                 Row(Modifier.padding(start = 16.dp, end = 16.dp, bottom = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(onClick = { confirmMove = true }, enabled = vm.storageStatus == null) { Text("Keep inside the app") }
-                    OutlinedButton(onClick = { pickExport.launch(null) }, enabled = vm.storageStatus == null && vm.hasFolder) { Text("Export all") }
+                    OutlinedButton(onClick = { confirmExport = true }, enabled = vm.storageStatus == null && vm.hasFolder) { Text("Export all") }
                 }
                 Row(Modifier.padding(start = 16.dp, end = 16.dp, bottom = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedButton(onClick = { pickFolder.launch(null) }) { Text("Choose folder") }

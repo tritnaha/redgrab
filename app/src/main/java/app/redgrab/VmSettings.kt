@@ -62,6 +62,7 @@ fun MainViewModel.changeColumns(v: Int) { prefs.columns = v; columns = prefs.col
 fun MainViewModel.setFolder(uri: Uri) {
     // A running download writes to the folder it started with; switching under it would split the files.
     if (DownloadWorker.active) { say("Pause the download before changing the save folder."); return }
+    if (storageStatus != null) { say("Wait for the move or export to finish."); return }
     val ctx = getApplication<Application>()
     val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
     runCatching { ctx.contentResolver.takePersistableUriPermission(uri, flags) }
@@ -158,6 +159,7 @@ internal fun MainViewModel.rescanFolder(force: Boolean = true) = viewModelScope.
 /** Moves the GIFs and videos of a folder you picked into RedGrab and lists them as "Imported". */
 fun MainViewModel.importFolder(uri: Uri) {
     if (importStatus != null) return
+    if (storageStatus != null) return say("Wait for the move or export to finish.")
     if (!hasFolder) return say("Choose a save folder first.")
     importStatus = "Starting"
     viewModelScope.launch(Dispatchers.IO) {
@@ -218,36 +220,69 @@ internal fun MainViewModel.usePrivateStorage() {
 }
 
 /**
- * "Keep clips inside the app": moves everything from the save folder into the app's own storage in
- * one go, then uses that from now on. Started again after an interruption, it carries on.
+ * "Keep clips inside the app": moves everything from the save folder (or, already inside, from
+ * another folder of RedGrab clips: [from]) into the app's own storage in one go, then uses that
+ * from now on. Started again after an interruption, it carries on.
  */
-fun MainViewModel.moveIntoApp() {
-    if (storageStatus != null || privateStorage) return
-    if (DownloadWorker.active) return say("Pause the download first.")
-    if (prefs.folderUri == null) { usePrivateStorage(); rescanFolder(force = true); return }
+fun MainViewModel.moveIntoApp(from: Uri? = null) {
+    if (storageStatus != null || (privateStorage && from == null)) return
+    if (DownloadWorker.active || importStatus != null) return say("Wait for the download or import to finish first.")
+    val source = from ?: prefs.folderUri
+    if (source == null) { usePrivateStorage(); rescanFolder(force = true); return }
+    if (PrivateDocs.isPrivate(source)) return
     storageStatus = "Starting"
     viewModelScope.launch(Dispatchers.IO) {
-        val r = runCatching { library.moveIntoApp { storageStatus = "Moving $it" } }
-        storageStatus = null
-        r.onSuccess { (moved, failed) ->
-            if (failed == 0) {
-                withContext(Dispatchers.Main) { usePrivateStorage(); rescanFolder(force = true) }
-                say("%,d file(s) moved into the app.".format(moved))
-            } else say("%,d moved, %,d couldn't be (see the log). Nothing is lost; run it again.".format(moved, failed))
-        }.onFailure { AppLog.e("Moving into the app failed", it); say("Couldn't move: ${it.message}") }
+        try {
+            if (from != null) runCatching { getApplication<Application>().contentResolver.takePersistableUriPermission(from, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION) }
+            // The folder has to be there and readable; an unreachable one is not an empty one.
+            if (from == null && library.folder() == null) { say("Can't reach the save folder. Nothing was changed."); return@launch }
+            val (moved, failed) = library.moveTreeIntoApp(source) { storageStatus = "Moving $it" }
+            val saved = state.value.saved.size
+            when {
+                failed > 0 -> say("%,d moved, %,d couldn't be (see the log). Nothing is lost; run it again.".format(moved, failed))
+                // Nothing found although the library has saved clips: the folder isn't the one they are in.
+                moved == 0 && from == null && saved > 0 && library.listNames().isEmpty() && PrivateDocs.dir(getApplication()).list().isNullOrEmpty() ->
+                    say("No files were found in the save folder. Nothing was changed.")
+                else -> {
+                    // From here on the app uses its own storage; only then is the old folder tidied.
+                    withContext(Dispatchers.Main) { usePrivateStorage() }
+                    val empty = library.tidyMovedFolder(source)
+                    withContext(Dispatchers.Main) { rescanFolder(force = true) }
+                    say("%,d file(s) moved into the app.".format(moved) + if (empty) "" else " Some files are still in the old folder.")
+                }
+            }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            AppLog.e("Moving into the app failed", e); say("Couldn't move: ${e.message}. Nothing is lost.")
+        } finally {
+            storageStatus = null
+            if (from != null) runCatching { getApplication<Application>().contentResolver.releasePersistableUriPermission(from, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION) }
+        }
     }
 }
 
-/** Copies every saved file into [to] as ordinary files. */
+/** Copies every saved file into [to] as ordinary files. The folder gets a marker that keeps galleries from showing them. */
 fun MainViewModel.exportAll(to: Uri) {
     if (storageStatus != null) return
     storageStatus = "Starting"
     viewModelScope.launch(Dispatchers.IO) {
-        runCatching { getApplication<Application>().contentResolver.takePersistableUriPermission(to, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION) }
-        val r = runCatching { library.exportTo(to) { storageStatus = "Exporting $it" } }
-        storageStatus = null
-        r.onSuccess { (copied, failed) -> say("%,d file(s) exported".format(copied) + if (failed > 0) ", %,d failed (see the log).".format(failed) else ".") }
-            .onFailure { AppLog.e("Export failed", it); say("Export failed: ${it.message}") }
+        val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+        val resolver = getApplication<Application>().contentResolver
+        runCatching { resolver.takePersistableUriPermission(to, flags) }
+        try {
+            val (copied, failed) = library.exportTo(to) { storageStatus = "Exporting $it" }
+            prefs.lastExport = "${labelFor(to)} · ${java.time.LocalDate.now()}"
+            lastExport = prefs.lastExport
+            say("%,d file(s) exported".format(copied) + if (failed > 0) ", %,d failed (see the log).".format(failed) else ". They are ordinary files now: other apps can open them.")
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            AppLog.e("Export failed", e); say("Export failed: ${e.message}")
+        } finally {
+            storageStatus = null
+            // The app keeps no hold on the folder it exported to.
+            runCatching { resolver.releasePersistableUriPermission(to, flags) }
+        }
     }
 }
-

@@ -157,6 +157,9 @@ class Prefs(context: Context) : RedditStore {
         sp.edit { putString("recent.$source", (listOf(q) + recent(source).filter { !it.equals(q, ignoreCase = true) }).take(12).joinToString("\n")) }
     }
 
+    /** Where and when plain copies were last exported to ("Movies/backup · 2026-11-28"); null = never. */
+    var lastExport: String? by text("lastExport")
+
     /** What you follow on a site that has no following of its own (hashtags, searches, boards). Kept in the app, newest first. */
     fun follows(source: String): List<String> = sp.getString("follow.$source", "")!!.split('\n').filter { it.isNotBlank() }
 

@@ -75,6 +75,7 @@ fun MainViewModel.deleteCopy(c: Clip) {
 }
 
 internal fun MainViewModel.startDownload(ids: List<String>) {
+    if (storageStatus != null) return say("Wait for the move or export to finish.")
     when {
         ids.isEmpty() -> say("Nothing new to download.")
         !hasFolder || library.folder() == null -> say("Choose a save folder first (Settings → Save folder).")

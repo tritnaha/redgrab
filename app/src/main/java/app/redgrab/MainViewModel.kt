@@ -295,6 +295,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Clips are kept inside the app (see PrivateDocs), not in a folder other apps can see. */
     var privateStorage by mutableStateOf(PrivateDocs.isPrivate(prefs.folderUri))
         internal set
+    var lastExport by mutableStateOf(prefs.lastExport)
+        internal set
     /** Progress of moving clips into the app or exporting them; null when neither is running. */
     var storageStatus by mutableStateOf<String?>(null)
         internal set

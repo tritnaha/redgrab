@@ -67,7 +67,7 @@ A content filter (straight, lesbian, gay, trans, bisexual, animated) applies to 
 
 1. Download the latest `RedGrab-<version>-<build>.apk` from [Releases](https://github.com/tritnaha/redgrab/releases).
 2. Open it and allow installing from that source.
-3. Clips are kept inside the app. A visible save folder can be chosen in Settings instead.
+3. Clips are kept inside the app. "Export all" in Settings writes plain copies to a folder you pick.
 4. Sign in to RedGifs under Settings → Account. You sign in on the site's own page inside the app.
 
 Requires Android 16 or later.

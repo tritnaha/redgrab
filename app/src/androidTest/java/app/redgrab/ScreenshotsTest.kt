@@ -372,30 +372,50 @@ class ScreenshotsTest {
             android.provider.DocumentsContract.deleteDocument(resolver, done)
             check(lib.listNames().isEmpty())
 
+            // A name that is taken is not handed out twice: a second file gets a name of its own.
+            val first = folder.createFile("video/mp4", "same.mp4")!!; val second = folder.createFile("video/mp4", "same.mp4")!!
+            check(first.name == "same.mp4" && second.name == "same (1).mp4") { "names: ${first.name}, ${second.name}" }
+            first.delete(); second.delete()
+            // The folder itself can't be renamed or deleted through the store.
+            check(runCatching { android.provider.DocumentsContract.renameDocument(resolver, android.provider.DocumentsContract.buildDocumentUriUsingTree(PrivateDocs.TREE, "clips"), "x") }.getOrNull() == null)
+
             // A folder of files, one in a sub-folder, moves in at once; the originals are gone afterwards.
-            val old = File(app.getExternalFilesDir(null), "oldfolder").apply { deleteRecursively(); mkdirs() }
+            // The old folder is addressed the way "New subfolder" addresses one: as a document inside a picked folder.
+            // The move must take that folder only, not everything in the folder that was picked.
+            val store = PrivateDocs.dir(app)
+            val old = File(store, "old").apply { mkdirs() }
             File(old, "a-hd.mp4").writeBytes(ByteArray(4000) { 1 }); File(old, "b-sd.mp4").writeBytes(ByteArray(2500) { 2 })
             File(old, "imported").mkdirs(); File(old, "imported/c.gif").writeBytes(ByteArray(900) { 3 }); File(old, ".nomedia").writeBytes(ByteArray(0))
-            // The old folder is reached as documents too: through the private store's own interface, one level up.
-            val oldTree = android.provider.DocumentsContract.buildTreeDocumentUri(PrivateDocs.AUTHORITY, "clips/old")
-            File(PrivateDocs.dir(app), "old").deleteRecursively(); old.copyRecursively(File(PrivateDocs.dir(app), "old")); old.deleteRecursively()
-            // (The public call refuses a folder that is already inside the app, so the move itself is called.)
-            check(kotlinx.coroutines.runBlocking { lib.prefs.folderUri = PrivateDocs.TREE; lib.moveIntoApp { } } == (0 to 0))
-            val (moved, failed) = kotlinx.coroutines.runBlocking { lib.moveTreeIntoApp(oldTree) { } }
-            check(moved == 3 && failed == 0) { "moved $moved, failed $failed" }
-            check(File(PrivateDocs.dir(app), "a-hd.mp4").length() == 4000L && File(PrivateDocs.dir(app), "imported/c.gif").length() == 900L) { "the moved files aren't in place" }
-            check(File(PrivateDocs.dir(app), "old").walkTopDown().none { it.isFile && it.name != ".nomedia" }) { "originals were left behind" }
-            File(PrivateDocs.dir(app), "old").deleteRecursively()
+            File(store, "elsewhere").mkdirs(); File(store, "elsewhere/not-ours.mp4").writeBytes(ByteArray(700) { 5 })
+            // Already inside under the same name but with other content: must not be overwritten, and its original must stay.
+            File(store, "b-sd.mp4").writeBytes(ByteArray(2500) { 8 })
+            val oldFolder = android.provider.DocumentsContract.buildDocumentUriUsingTree(PrivateDocs.TREE, "clips/old")
+            check(kotlinx.coroutines.runBlocking { lib.prefs.folderUri = PrivateDocs.TREE; lib.moveIntoApp { } } == (0 to 0)) { "a folder already inside was moved" }
+            val (moved, failed) = kotlinx.coroutines.runBlocking { lib.moveTreeIntoApp(oldFolder) { } }
+            check(moved == 2 && failed == 1) { "moved $moved, failed $failed" }
+            check(File(store, "a-hd.mp4").readBytes().let { it.size == 4000 && it.all { b -> b == 1.toByte() } } && File(store, "imported/c.gif").length() == 900L) { "the moved files aren't in place" }
+            check(File(store, "b-sd.mp4").readBytes().all { it == 8.toByte() } && File(old, "b-sd.mp4").readBytes().all { it == 2.toByte() }) { "a different file of the same name was overwritten or its original deleted" }
+            check(!File(old, "a-hd.mp4").exists() && !File(old, "imported/c.gif").exists()) { "originals were left behind" }
+            check(File(store, "elsewhere/not-ours.mp4").length() == 700L && !File(store, "not-ours.mp4").exists()) { "the move reached outside the folder it was given" }
+            check(store.walkTopDown().none { it.name.endsWith(".moving") }) { "a half-made copy was left" }
+            // Not everything could be moved, so the old folder is not tidied away.
+            check(!kotlinx.coroutines.runBlocking { lib.tidyMovedFolder(oldFolder) } && File(old, ".nomedia").exists())
+            File(old, "b-sd.mp4").delete()
+            check(kotlinx.coroutines.runBlocking { lib.tidyMovedFolder(oldFolder) } && !File(old, ".nomedia").exists() && !File(old, "imported").exists()) { "the emptied folder wasn't tidied" }
+            old.deleteRecursively(); File(store, "elsewhere").deleteRecursively()
 
-            // Export: plain files, sub-folder kept, the app's own copies stay.
+            // Export: plain files, sub-folder kept, a marker against galleries, the app's own copies stay.
             lib.prefs.folderUri = PrivateDocs.TREE
-            File(PrivateDocs.dir(app), "out").mkdirs()
+            File(store, "out").mkdirs()
             val outTree = android.provider.DocumentsContract.buildTreeDocumentUri(PrivateDocs.AUTHORITY, "clips/out")
-            // (Exporting into a folder inside the store itself, which is all a test may write to; the walk must not copy its own output.)
+            // (Into a folder inside the store itself, which is all a test may write to; the export must not copy its own output.)
             val (copied, bad) = kotlinx.coroutines.runBlocking { lib.exportTo(outTree) { } }
-            check(bad == 0 && copied >= 3) { "exported $copied, failed $bad" }
-            check(File(PrivateDocs.dir(app), "out/a-hd.mp4").length() == 4000L && File(PrivateDocs.dir(app), "out/imported/c.gif").length() == 900L) { "exported files missing" }
-            check(File(PrivateDocs.dir(app), "a-hd.mp4").exists()) { "export removed the app's copy" }
+            check(bad == 0 && copied == 3) { "exported $copied, failed $bad" }
+            check(File(store, "out/a-hd.mp4").length() == 4000L && File(store, "out/imported/c.gif").length() == 900L && File(store, "out/.nomedia").exists()) { "exported files missing" }
+            check(!File(store, "out/out").exists() && File(store, "out").walkTopDown().none { it.name.endsWith(".exporting") }) { "the export copied itself or left a half-made file" }
+            check(File(store, "a-hd.mp4").exists()) { "export removed the app's copy" }
+            // A second export copies nothing again.
+            check(kotlinx.coroutines.runBlocking { lib.exportTo(outTree) { } } == (0 to 0))
         } finally {
             PrivateDocs.dir(app).deleteRecursively()
             lib.prefs.folderUri = before; lib.prefs.folderLabel = label

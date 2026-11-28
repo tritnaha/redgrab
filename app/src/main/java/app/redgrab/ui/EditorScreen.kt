@@ -359,20 +359,24 @@ private fun saveResult(vm: MainViewModel, clip: Clip, out: File, p: EditParams, 
             // never leaves you with a half-written original.
             val found = lib.localFile(clip) ?: error("Original file not found")
             val targetName = clip.copyFile ?: found.second?.fileName(clip.id) ?: error("Original file not found")
-            val tmp = folder.createFile("application/octet-stream", "$targetName.new") ?: error("Could not create a temporary file")
+            // The file may sit in a sub-folder ("imported/x.mp4"): the new version is made and renamed there, by its own name.
+            val leaf = targetName.substringAfterLast('/')
+            val dir = targetName.substringBeforeLast('/', "").let { sub -> if (sub.isEmpty()) folder else sub.split('/').fold(folder) { d, n -> d.findFile(n)?.takeIf { it.isDirectory } ?: error("Original file not found") } }
+            dir.findFile("$leaf.new")?.delete()
+            val tmp = dir.createFile("application/octet-stream", "$leaf.new") ?: error("Could not create a temporary file")
             try {
-                ctx.contentResolver.openOutputStream(tmp.uri)!!.use { o -> out.inputStream().use { it.copyTo(o) } }
+                ctx.contentResolver.openOutputStream(tmp.uri, "wt")!!.use { o -> out.inputStream().use { it.copyTo(o) } }
             } catch (e: Exception) {
                 tmp.delete(); throw e
             }
             // Swap: set the original aside, move the new file in, and only then drop the original.
             val resolver = ctx.contentResolver
             synchronized(lib.swapLock) {
-                val aside = runCatching { android.provider.DocumentsContract.renameDocument(resolver, found.first, "$targetName.old") }.getOrNull()
+                val aside = runCatching { android.provider.DocumentsContract.renameDocument(resolver, found.first, "$leaf.old") }.getOrNull()
                 if (aside == null) { tmp.delete(); error("Couldn't set the original aside, so nothing was changed") }
-                val placed = runCatching { android.provider.DocumentsContract.renameDocument(resolver, tmp.uri, targetName) }.getOrNull()
+                val placed = runCatching { android.provider.DocumentsContract.renameDocument(resolver, tmp.uri, leaf) }.getOrNull()
                 if (placed == null) {
-                    runCatching { android.provider.DocumentsContract.renameDocument(resolver, aside, targetName) }
+                    runCatching { android.provider.DocumentsContract.renameDocument(resolver, aside, leaf) }
                     tmp.delete()
                     error("Couldn't put the edited file in place; the original is unchanged")
                 }
@@ -393,7 +397,7 @@ private fun saveResult(vm: MainViewModel, clip: Clip, out: File, p: EditParams, 
         val originalId = clip.copyOf ?: clip.id
         val (copyId, name) = lib.nextCopyName(originalId)
         val doc = folder.createFile("video/mp4", name) ?: error("Could not create $name")
-        ctx.contentResolver.openOutputStream(doc.uri)!!.use { o -> out.inputStream().use { it.copyTo(o) } }
+        ctx.contentResolver.openOutputStream(doc.uri, "wt")!!.use { o -> out.inputStream().use { it.copyTo(o) } }
         // The provider may append its own extension; record the real name.
         val realName = doc.name ?: name
         lib.makeThumb(copyId, doc.uri)
