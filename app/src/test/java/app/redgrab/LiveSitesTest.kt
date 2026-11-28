@@ -26,7 +26,7 @@ class LiveSitesTest {
         body()
     } catch (e: SiteBlockedException) { say("$site · $what: BLOCKED (bot check)"); null
     } catch (e: HttpException) {
-        if (e.code == 403 || e.code == 429 || e.code == 503) say("$site · $what: BLOCKED (HTTP ${e.code})") else { failures++; say("$site · $what: FAIL (HTTP ${e.code})") }
+        if (e.code == 403 || e.code == 429 || e.code == 503) say("$site · $what: BLOCKED (HTTP ${e.code})") else { failures++; say("$site · $what: FAIL (HTTP ${e.code}: ${e.message?.take(160)})") }
         null
     } catch (e: Exception) { failures++; say("$site · $what: FAIL (${e.javaClass.simpleName}: ${e.message?.take(120)})"); null }
 
@@ -77,17 +77,20 @@ class LiveSitesTest {
         media("EroMe", (hot ?: found)?.clips?.firstOrNull())
 
         // sex.com
-        val popular = page("sex.com", "most liked (no search)") { SexComApi(http).search("", 1) }
         val sx = page("sex.com", "search") { SexComApi(http).search("dance", 1) }
         page("sex.com", "search, page 2") { SexComApi(http).search("dance", 2) }
-        media("sex.com", (sx ?: popular)?.clips?.firstOrNull())
+        media("sex.com", sx?.clips?.firstOrNull())
 
-        // FikFap
-        val tag = page("FikFap", "hashtag") { FikFapApi(http).tagPosts("dance", null, 1) }
-        if (tag?.cursor != null) page("FikFap", "hashtag, next page", min = 0) { FikFapApi(http).tagPosts("dance", tag.cursor, 2) }
-        tag?.clips?.firstOrNull { it.user.isNotEmpty() }?.let { c -> page("FikFap", "a user") { FikFapApi(http).userPosts(c.user, null, 1) } }
-        tag?.clips?.firstOrNull()?.let { c -> check("FikFap", "one post") { val p = FikFapApi(http).post(c.id.removePrefix(OnlineSource.FikFap.prefix)); say("FikFap · one post: ${if (p?.id == c.id) "ok" else "FAIL"}"); if (p?.id != c.id) failures++ } }
-        media("FikFap", tag?.clips?.firstOrNull())
+        // FikFap (a post and a user known from gallery-dl's own tests, then hashtags)
+        check("FikFap", "one post") { val p = FikFapApi(http).post("1429486"); say("FikFap · one post: ${if (p != null) "ok" else "FAIL (no playable post)"}"); if (p == null) failures++ }
+        val user = page("FikFap", "a user") { FikFapApi(http).userPosts("alinevs", null, 1) }
+        if (user?.cursor != null) page("FikFap", "a user, next page", min = 0) { FikFapApi(http).userPosts("alinevs", user.cursor, 2) }
+        // A hashtag from a real post, so a 404 can't be the test's own guess at a name.
+        val label = user?.clips?.flatMap { it.tags }?.groupingBy { it }?.eachCount()?.maxByOrNull { it.value }?.key
+        say("FikFap · a hashtag was found on the user's posts: ${label != null}")
+        val tag = page("FikFap", "hashtag") { FikFapApi(http).tagPosts(label ?: "amateur", null, 1) }
+        if (tag?.cursor != null) page("FikFap", "hashtag, next page", min = 0) { FikFapApi(http).tagPosts(label ?: "amateur", tag.cursor, 2) }
+        media("FikFap", (tag ?: user)?.clips?.firstOrNull())
 
         // Reddit
         val id = System.getenv("REDDIT_CLIENT_ID").orEmpty()

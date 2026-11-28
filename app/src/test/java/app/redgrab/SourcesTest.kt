@@ -531,8 +531,7 @@ class SourcesTest {
         assertFalse(Feed.home(OnlineSource.EroMe).needsQuery)
         assertFalse(Feed.home(OnlineSource.FourChan).needsQuery)
         assertTrue(Feed.home(OnlineSource.FikFap).needsQuery)
-        assertFalse(Feed.home(OnlineSource.SexCom).needsQuery)
-        assertEquals("Popular", Feed.SexSearch("").title)
+        assertTrue(Feed.home(OnlineSource.SexCom).needsQuery)
         // 4chan: a board other than /gif/ is part of the feed and of its title.
         assertEquals("/gif/", Feed.ChanThreads("").title)
         assertEquals("/wsg/ dance", Feed.ChanThreads("dance", "wsg").title)

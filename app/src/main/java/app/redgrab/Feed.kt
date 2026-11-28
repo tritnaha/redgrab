@@ -105,10 +105,11 @@ sealed interface Feed {
         override val query get() = "@$name"
     }
 
-    // sex.com: a GIF search; with nothing typed, the most liked (as the site's own /gifs/ page lists them)
+    // sex.com: a GIF search. An empty search is refused by the site (HTTP 400, seen from GitHub's runner 2026-11).
     data class SexSearch(override val query: String) : Feed {
-        override val title get() = query.ifBlank { "Popular" }
+        override val title get() = query
         override val source get() = OnlineSource.SexCom
+        override val needsQuery get() = query.isBlank()
         override val numbered get() = true
     }
 

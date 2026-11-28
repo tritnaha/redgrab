@@ -235,7 +235,6 @@ fun DiscoverScreen(vm: MainViewModel, onSignIn: () -> Unit, onOpenSettings: () -
                 OnlineSource.RedGifs -> listOf(Feed.MyNiches, Feed.ForYou, Feed.Search(""))
                 // What these sites list by themselves, then what you opened recently.
                 OnlineSource.EroMe -> listOf(Feed.EromeExplore(false), Feed.EromeExplore(true)) + vm.recents.map { Feed.fromQuery(source, it) }
-                OnlineSource.SexCom -> listOf(Feed.SexSearch("")) + vm.recents.map { Feed.fromQuery(source, it) }
                 else -> vm.recents.map { Feed.fromQuery(source, it) }
             }
             (mine + recent + d.subs.map { Feed.Subreddit(it) }).distinctBy { it.title.lowercase() }.filter { !it.needsQuery }
